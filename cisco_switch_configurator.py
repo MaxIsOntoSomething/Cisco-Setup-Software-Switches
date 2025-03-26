@@ -27,6 +27,10 @@ class CiscoSwitchConfigurator:
         self.preview_items = []
         self.preview_vars = {}
         
+        # Create notification label
+        self.notification_var = tk.StringVar()
+        self.notification_frame = None
+        
         self.setup_ui()
         
     def setup_ui(self):
@@ -61,6 +65,9 @@ class CiscoSwitchConfigurator:
         
         # Setup Console Tab
         self.setup_console_tab()
+        
+        # Setup notification area at the bottom
+        self.setup_notification_area()
         
     def setup_connection_tab(self):
         # Connection type
@@ -149,6 +156,16 @@ class CiscoSwitchConfigurator:
         preview_container = ttk.Frame(self.preview_frame)
         preview_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Connection status at the top
+        self.connection_status_frame = ttk.LabelFrame(preview_container, text="Connection Status")
+        self.connection_status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.connection_status_label = ttk.Label(self.connection_status_frame, 
+                                               text="Not connected",
+                                               foreground="red",
+                                               font=("Arial", 10, "bold"))
+        self.connection_status_label.pack(pady=5, padx=10)
+        
         # Top section - instructions and buttons
         top_frame = ttk.Frame(preview_container)
         top_frame.pack(fill=tk.X, pady=5)
@@ -186,34 +203,106 @@ class CiscoSwitchConfigurator:
         self.empty_preview_label.pack(pady=20)
     
     def setup_console_tab(self):
-        # Console output
-        console_frame = ttk.LabelFrame(self.console_frame, text="Console Output")
+        """Set up the console tab"""
+        console_frame = ttk.Frame(self.console_frame)
         console_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.console_output = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, bg="black", fg="green")
-        self.console_output.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Create a frame for the console options
+        options_frame = ttk.Frame(console_frame)
+        options_frame.pack(fill=tk.X, side=tk.TOP, pady=(0, 5))
+        
+        # Create variables for console options
+        self.manual_mode = tk.BooleanVar(value=False)
+        self.auto_execute = tk.BooleanVar(value=False)
+        self.command_delay = tk.DoubleVar(value=0.5)
+        
+        # Add a checkbox to toggle manual mode
+        manual_mode_check = ttk.Checkbutton(
+            options_frame,
+            text="Manual Typing Mode",
+            variable=self.manual_mode,
+            command=self.toggle_manual_mode
+        )
+        manual_mode_check.pack(side=tk.LEFT)
+        
+        # Add auto-execute option
+        auto_execute_check = ttk.Checkbutton(
+            options_frame,
+            text="Auto-execute commands",
+            variable=self.auto_execute
+        )
+        auto_execute_check.pack(side=tk.LEFT, padx=15)
+        
+        # Add delay option
+        ttk.Label(options_frame, text="Delay (sec):").pack(side=tk.LEFT, padx=(15, 5))
+        delay_entry = ttk.Entry(options_frame, textvariable=self.command_delay, width=5)
+        delay_entry.pack(side=tk.LEFT)
+        
+        # Add a button to clear the console
+        clear_button = ttk.Button(
+            options_frame,
+            text="Clear Console",
+            command=self.clear_console
+        )
+        clear_button.pack(side=tk.RIGHT)
+        
+        # Create the console output text box
+        self.console_output = scrolledtext.ScrolledText(
+            console_frame, wrap=tk.WORD, width=80, height=20, bg="black", fg="green"
+        )
+        self.console_output.pack(fill=tk.BOTH, expand=True)
+        self.console_output.tag_configure("device_response", foreground="#00FFFF")  # Light cyan for device responses
+        
+        # Set the font
+        self.console_output.configure(font=("Courier New", 10))
+        
+        # Make it read-only
         self.console_output.config(state=tk.DISABLED)
         
-        # Console input
-        input_frame = ttk.Frame(self.console_frame)
-        input_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Create the input field
+        input_frame = ttk.Frame(console_frame)
+        input_frame.pack(fill=tk.X, pady=(5, 0))
         
+        ttk.Label(input_frame, text="Command:").pack(side=tk.LEFT)
         self.console_input = ttk.Entry(input_frame)
-        self.console_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.console_input.bind('<Return>', self.send_command)
+        self.console_input.pack(fill=tk.X, expand=True, side=tk.LEFT, padx=5)
+        self.console_input.bind("<Return>", self.send_command)
         
-        ttk.Button(input_frame, text="Send", command=lambda: self.send_command(None)).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(input_frame, text="Send", command=self.send_command).pack(side=tk.RIGHT)
         
-        # Auto-execute options
-        auto_frame = ttk.LabelFrame(self.console_frame, text="Command Execution")
-        auto_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Add an initial welcome message
+        self.log_to_console("Console ready. Connect to a device to begin.\n")
         
-        self.auto_execute = tk.BooleanVar(value=False)
-        ttk.Checkbutton(auto_frame, text="Auto-execute commands", variable=self.auto_execute).pack(side=tk.LEFT, padx=5, pady=5)
+        # Bind the tab change event to set focus on the console input field
+        self.notebook.bind("<<NotebookTabChanged>>", self.handle_tab_change)
         
-        ttk.Label(auto_frame, text="Delay between commands (sec):").pack(side=tk.LEFT, padx=5, pady=5)
-        self.command_delay = tk.DoubleVar(value=0.5)
-        ttk.Entry(auto_frame, textvariable=self.command_delay, width=5).pack(side=tk.LEFT, padx=5, pady=5)
+    def setup_notification_area(self):
+        """Create a notification area at the bottom of the window"""
+        self.notification_frame = ttk.Frame(self.root)
+        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
+        self.notification_frame.pack_forget()  # Hide it initially
+        
+        self.notification_label = ttk.Label(
+            self.notification_frame, 
+            textvariable=self.notification_var,
+            background="#e6ffe6",  # Light green background
+            foreground="#006400",  # Dark green text
+            font=("Arial", 10),
+            padding=10
+        )
+        self.notification_label.pack(side=tk.RIGHT, padx=10, pady=5)
+        
+    def show_notification(self, message, duration=3000):
+        """Show a notification message at the bottom of the window for a limited time"""
+        self.notification_var.set(message)
+        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
+        
+        # Schedule to hide the notification after duration
+        self.root.after(duration, self.hide_notification)
+        
+    def hide_notification(self):
+        """Hide the notification area"""
+        self.notification_frame.pack_forget()
         
     def refresh_com_ports(self):
         """Refresh the available COM ports"""
@@ -240,7 +329,11 @@ class CiscoSwitchConfigurator:
                     baudrate=self.baudrate.get(),
                     timeout=1
                 )
-                self.log_to_console(f"Connected to {self.com_port.get()} at {self.baudrate.get()} baud\n")
+                connection_info = f"Connected to {self.com_port.get()} at {self.baudrate.get()} baud"
+                self.log_to_console(f"{connection_info}\n")
+                
+                # Update connection status
+                self.update_connection_status(True, f"COM: {self.com_port.get()} @ {self.baudrate.get()} baud")
                 
                 # Start a thread to read from the serial port
                 threading.Thread(target=self.read_from_serial, daemon=True).start()
@@ -255,16 +348,21 @@ class CiscoSwitchConfigurator:
                 )
                 self.connection = client
                 self.ssh_shell = client.invoke_shell()
-                self.log_to_console(f"Connected to {self.ssh_host.get()} via SSH\n")
+                connection_info = f"Connected to {self.ssh_host.get()} via SSH"
+                self.log_to_console(f"{connection_info}\n")
+                
+                # Update connection status
+                self.update_connection_status(True, f"SSH: {self.ssh_username.get()}@{self.ssh_host.get()}")
                 
                 # Start a thread to read from SSH
                 threading.Thread(target=self.read_from_ssh, daemon=True).start()
                 
             # Switch to console tab after connecting
-            self.notebook.select(2)  # Index 2 is the console tab
+            self.notebook.select(3)  # Index 3 is the Console tab (after Preview tab)
                 
         except Exception as e:
             messagebox.showerror("Connection Error", str(e))
+            self.update_connection_status(False)
             
     def disconnect(self):
         """Disconnect from the switch"""
@@ -277,6 +375,9 @@ class CiscoSwitchConfigurator:
                     
                 self.connection = None
                 self.log_to_console("Disconnected from switch\n")
+                
+                # Update connection status
+                self.update_connection_status(False)
             except Exception as e:
                 messagebox.showerror("Disconnection Error", str(e))
                 
@@ -284,9 +385,13 @@ class CiscoSwitchConfigurator:
         """Read data from the serial port"""
         while self.connection and self.connection.is_open:
             try:
+                # Wait a bit for data to arrive (especially after sending command)
+                time.sleep(0.2)
+                
                 if self.connection.in_waiting:
                     data = self.connection.read(self.connection.in_waiting).decode('utf-8', errors='replace')
-                    self.log_to_console(data, from_device=True)
+                    if data:
+                        self.log_to_console(data, from_device=True)
             except Exception as e:
                 self.log_to_console(f"Error reading from serial: {e}\n")
                 break
@@ -296,9 +401,13 @@ class CiscoSwitchConfigurator:
         """Read data from the SSH connection"""
         while self.connection:
             try:
+                # Wait a bit for data to arrive (especially after sending command)
+                time.sleep(0.2)
+                
                 if self.ssh_shell.recv_ready():
                     data = self.ssh_shell.recv(4096).decode('utf-8', errors='replace')
-                    self.log_to_console(data, from_device=True)
+                    if data:
+                        self.log_to_console(data, from_device=True)
             except Exception as e:
                 self.log_to_console(f"Error reading from SSH: {e}\n")
                 break
@@ -321,37 +430,54 @@ class CiscoSwitchConfigurator:
         try:
             if self.connection_type.get() == "COM":
                 self.connection.write((command + "\r\n").encode())
+                # Flush the buffer
+                self.connection.flush()
             else:
                 self.ssh_shell.send(command + "\n")
                 
             # Clear the input field
             self.console_input.delete(0, tk.END)
             
-            # If we have queued commands, advance to the next one
-            if hasattr(self, 'queued_commands') and len(self.queued_commands) > 0 and not self.auto_execute.get():
-                # Remove the current command from the queue if it matches
-                if self.queued_commands and self.queued_commands[0] == command:
-                    self.queued_commands.pop(0)
-                
-                # Wait a short time before loading the next command (to allow response to be seen)
-                if self.queued_commands:
-                    self.root.after(500, lambda: self.console_input.delete(0, tk.END))
-                    self.root.after(600, lambda: self.console_input.insert(0, self.queued_commands[0]))
-                    self.root.after(700, lambda: self.log_to_console("Ready for next command. Press Enter or click Send to continue.\n"))
-                else:
-                    self.root.after(700, lambda: self.log_to_console("All commands executed.\n"))
+            # If manual mode is enabled, don't process queued commands
+            if self.manual_mode.get():
+                # Keep focus on the input field for next manual command
+                self.console_input.focus_set()
+            else:
+                # Wait a bit for response to come in before proceeding to next queued command
+                self.root.after(500, lambda: self.check_for_next_command(command))
                 
         except Exception as e:
             messagebox.showerror("Command Error", str(e))
             
+    def check_for_next_command(self, last_command):
+        """Check if we should proceed to the next command after waiting for a response"""
+        # Don't process queued commands if in manual mode
+        if self.manual_mode.get():
+            return
+            
+        # If we have queued commands, advance to the next one
+        if hasattr(self, 'queued_commands') and len(self.queued_commands) > 0 and not self.auto_execute.get():
+            # Remove the current command from the queue if it matches
+            if self.queued_commands and self.queued_commands[0] == last_command:
+                self.queued_commands.pop(0)
+            
+            # Wait a short time before loading the next command (to allow response to be seen)
+            if self.queued_commands:
+                self.console_input.delete(0, tk.END)
+                self.console_input.insert(0, self.queued_commands[0])
+                self.log_to_console("Ready for next command. Press Enter or click Send to continue.\n")
+    
     def log_to_console(self, text, from_device=False):
         """Log text to the console output"""
         self.console_output.config(state=tk.NORMAL)
         
         # Apply different formatting based on source
         if from_device:
-            self.console_output.insert(tk.END, text)
+            # Device responses in light cyan
+            self.console_output.tag_config("device", foreground="#00CCCC")
+            self.console_output.insert(tk.END, text, "device")
         else:
+            # Our commands and messages in green
             self.console_output.insert(tk.END, text)
             
         self.console_output.see(tk.END)
@@ -543,15 +669,17 @@ class CiscoSwitchConfigurator:
         try:
             if self.connection_type.get() == "COM":
                 self.connection.write((command + "\r\n").encode())
+                # Flush the buffer
+                self.connection.flush()
             else:
                 self.ssh_shell.send(command + "\n")
                 
-            # If auto-execute mode is enabled, we wait and then remove the command
-            # Otherwise, just put it in the input field for manual execution
+            # If auto-execute mode is not enabled, just put it in the input field
             if not self.auto_execute.get() and hasattr(self, 'queued_commands') and self.queued_commands:
                 # Fill the console input with this command
                 self.console_input.delete(0, tk.END)
                 self.console_input.insert(0, command)
+                
         except Exception as e:
             raise Exception(f"Error sending command: {e}")
         
@@ -1030,8 +1158,8 @@ class CiscoSwitchConfigurator:
         # Bind checkbox to highlight update
         var.trace_add("write", lambda *args, i=preview_id: self.update_item_highlight(i))
         
-        # Switch to Preview tab
-        self.notebook.select(2)  # Index 2 is the Preview tab
+        # Show notification instead of switching tabs
+        self.show_notification(f"Successfully added '{item['name']}' to preview")
     
     def update_item_highlight(self, item_id):
         """Update the highlighting of a preview item based on its selection state"""
@@ -1151,6 +1279,49 @@ class CiscoSwitchConfigurator:
             # If manual mode, load the next command into the input field after this one is processed
             # The send_command method will handle removing the current command and loading the next one
             pass
+
+    def update_connection_status(self, is_connected, connection_details=None):
+        """Update the connection status displayed in the Preview tab"""
+        if is_connected and connection_details:
+            self.connection_status_label.config(
+                text=f"Connected to: {connection_details}",
+                foreground="green"
+            )
+        else:
+            self.connection_status_label.config(
+                text="Not connected",
+                foreground="red"
+            )
+
+    def handle_tab_change(self, event):
+        """Handle tab change events"""
+        selected_tab = self.notebook.select()
+        tab_index = self.notebook.index(selected_tab)
+        
+        # If the console tab is selected, focus on the input field
+        if tab_index == 3:  # Index 3 is the Console tab
+            self.console_input.focus_set()
+    
+    def toggle_manual_mode(self):
+        """Toggle between manual and automated typing modes"""
+        if self.manual_mode.get():
+            # In manual mode, clear any queued commands
+            if hasattr(self, 'queued_commands'):
+                self.queued_commands = []
+            # Focus on the input field
+            self.console_input.focus_set()
+            self.console_input.delete(0, tk.END)
+            self.log_to_console("Manual typing mode enabled. Type commands directly.\n")
+        else:
+            self.log_to_console("Manual typing mode disabled. Using command queue.\n")
+    
+    def clear_console(self):
+        """Clear the console output"""
+        self.console_output.config(state=tk.NORMAL)
+        self.console_output.delete(1.0, tk.END)
+        self.console_output.config(state=tk.DISABLED)
+        # Focus back on the input field
+        self.console_input.focus_set()
 
 
 if __name__ == "__main__":
