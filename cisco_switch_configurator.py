@@ -689,77 +689,263 @@ class CiscoSwitchConfigurator:
             
     def save_configuration(self):
         """Save the current configuration values to a file"""
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
-        )
+        # Create a dialog to get the configuration name
+        save_dialog = tk.Toplevel(self.root)
+        save_dialog.title("Save Configuration")
+        save_dialog.geometry("400x150")
+        save_dialog.transient(self.root)
+        save_dialog.grab_set()
         
-        if not file_path:
+        ttk.Label(save_dialog, text="Enter a name for this configuration:").pack(pady=(20, 10))
+        
+        config_name = tk.StringVar()
+        name_entry = ttk.Entry(save_dialog, textvariable=config_name, width=40)
+        name_entry.pack(padx=20, pady=5)
+        name_entry.focus_set()
+        
+        button_frame = ttk.Frame(save_dialog)
+        button_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Button(button_frame, text="Save", 
+                  command=lambda: self.do_save_config(config_name.get(), save_dialog)).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Cancel", 
+                  command=save_dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        
+    def do_save_config(self, config_name, dialog):
+        """Actually save the configuration after name is provided"""
+        if not config_name:
+            messagebox.showerror("Error", "Please enter a name for the configuration", parent=dialog)
             return
             
+        # Create saved_configs directory if it doesn't exist
+        os.makedirs("saved_configs", exist_ok=True)
+        
+        # Create a filename based on the config name
+        safe_name = "".join(c for c in config_name if c.isalnum() or c in " _-").strip().replace(" ", "_")
+        file_path = os.path.join("saved_configs", f"{safe_name}.json")
+        
+        # Check if file already exists
+        if os.path.exists(file_path):
+            overwrite = messagebox.askyesno("Confirm Overwrite", 
+                                           f"Configuration '{config_name}' already exists. Overwrite?", 
+                                           parent=dialog)
+            if not overwrite:
+                return
+                
         # Collect all input values from visible frames
-        config = {}
+        config = {
+            "name": config_name,
+            "date_saved": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "data": {}
+        }
         
         # Iterate through all category frames
         for category in CONFIG_DATA.keys():
-            config[category] = {}
+            config["data"][category] = {}
             
             # For each item in the category, save any input values
             for i, item in enumerate(CONFIG_DATA[category]):
                 item_name = item["name"]
-                config[category][item_name] = {}
+                config["data"][category][item_name] = {}
                 
                 # Look for visible frames with this item
                 for widget in self.config_detail_frame.winfo_children():
                     if hasattr(widget, 'item') and widget.item == item and hasattr(widget, 'vars'):
                         # Save the values
                         for name, var in widget.vars.items():
-                            config[category][item_name][name] = var.get()
+                            config["data"][category][item_name][name] = var.get()
                             
         # Save to file
         try:
             with open(file_path, 'w') as f:
                 json.dump(config, f, indent=2)
-            messagebox.showinfo("Success", "Configuration saved successfully")
+            messagebox.showinfo("Success", f"Configuration '{config_name}' saved successfully", parent=dialog)
+            dialog.destroy()
         except Exception as e:
-            messagebox.showerror("Save Error", str(e))
+            messagebox.showerror("Save Error", str(e), parent=dialog)
             
     def load_configuration(self):
         """Load configuration values from a file"""
-        file_path = filedialog.askopenfilename(
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
-        )
+        # Create saved_configs directory if it doesn't exist
+        os.makedirs("saved_configs", exist_ok=True)
         
-        if not file_path:
+        # Get list of saved configurations
+        try:
+            config_files = [f for f in os.listdir("saved_configs") if f.endswith(".json")]
+        except Exception:
+            config_files = []
+            
+        if not config_files:
+            messagebox.showinfo("Information", "No saved configurations found.\nSave a configuration first.")
             return
             
-        try:
-            with open(file_path, 'r') as f:
-                config = json.load(f)
+        # Create a dialog to select a configuration
+        load_dialog = tk.Toplevel(self.root)
+        load_dialog.title("Load Configuration")
+        load_dialog.geometry("400x200")
+        load_dialog.transient(self.root)
+        load_dialog.grab_set()
+        
+        ttk.Label(load_dialog, text="Select a configuration to load:").pack(pady=(20, 10))
+        
+        # Create a frame for the combobox
+        select_frame = ttk.Frame(load_dialog)
+        select_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        # Dictionary to map displayed names to filenames
+        self.config_map = {}
+        config_names = []
+        
+        # Load configuration names from files
+        for filename in config_files:
+            try:
+                with open(os.path.join("saved_configs", filename), 'r') as f:
+                    config_data = json.load(f)
+                    if "name" in config_data:
+                        name = config_data["name"]
+                        date = config_data.get("date_saved", "Unknown date")
+                        display_name = f"{name} ({date})"
+                        config_names.append(display_name)
+                        self.config_map[display_name] = filename
+                    else:
+                        # If no name in config, use filename
+                        display_name = filename.replace(".json", "")
+                        config_names.append(display_name)
+                        self.config_map[display_name] = filename
+            except Exception:
+                # If error reading file, just use filename
+                display_name = filename.replace(".json", "")
+                config_names.append(display_name)
+                self.config_map[display_name] = filename
+        
+        # Sort by name
+        config_names.sort()
+        
+        # Create combobox
+        self.selected_config = tk.StringVar()
+        if config_names:
+            self.selected_config.set(config_names[0])
+            
+        config_combo = ttk.Combobox(select_frame, textvariable=self.selected_config, 
+                                   values=config_names, width=50, state="readonly")
+        config_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Preview of selected config
+        preview_frame = ttk.LabelFrame(load_dialog, text="Configuration Details")
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        self.config_preview = ttk.Label(preview_frame, text="", wraplength=350, justify=tk.LEFT)
+        self.config_preview.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
+        
+        # Update preview when selection changes
+        config_combo.bind("<<ComboboxSelected>>", lambda e: self.update_config_preview())
+        
+        # Initialize preview
+        self.update_config_preview()
+        
+        # Buttons
+        button_frame = ttk.Frame(load_dialog)
+        button_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Button(button_frame, text="Load", 
+                  command=lambda: self.do_load_config(load_dialog)).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Delete", 
+                  command=lambda: self.delete_config(load_dialog)).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Cancel", 
+                  command=load_dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        
+    def update_config_preview(self):
+        """Update the preview of the selected configuration"""
+        if not hasattr(self, 'selected_config') or not self.selected_config.get():
+            return
+            
+        selected = self.selected_config.get()
+        if selected in self.config_map:
+            filename = self.config_map[selected]
+            try:
+                with open(os.path.join("saved_configs", filename), 'r') as f:
+                    config = json.load(f)
+                    
+                # Create preview text
+                if "name" in config and "date_saved" in config:
+                    preview = f"Name: {config['name']}\nSaved: {config['date_saved']}\n\n"
+                else:
+                    preview = f"File: {filename}\n\n"
+                    
+                # Show categories and item counts
+                if "data" in config:
+                    for category, items in config["data"].items():
+                        if items:  # Only show non-empty categories
+                            item_count = sum(1 for item, values in items.items() if values)
+                            if item_count > 0:
+                                preview += f"• {category}: {item_count} items\n"
+                                
+                self.config_preview.config(text=preview)
+            except Exception as e:
+                self.config_preview.config(text=f"Error loading preview: {e}")
                 
-            # Apply loaded values to any visible input fields
-            for category, items in config.items():
-                # Select the category to make it visible
-                for i in range(self.category_listbox.size()):
-                    if self.category_listbox.get(i) == category:
-                        self.category_listbox.selection_clear(0, tk.END)
-                        self.category_listbox.selection_set(i)
-                        self.on_category_select(None)
-                        break
-                        
-                # Now apply the values to visible frames
-                for item_name, values in items.items():
-                    # Find the frame with this item
-                    for widget in self.config_detail_frame.winfo_children():
-                        if hasattr(widget, 'item') and widget.item["name"] == item_name and hasattr(widget, 'vars'):
-                            # Apply the values
-                            for name, value in values.items():
-                                if name in widget.vars:
-                                    widget.vars[name].set(value)
-                                    
-            messagebox.showinfo("Success", "Configuration loaded successfully")
-        except Exception as e:
-            messagebox.showerror("Load Error", str(e))
+    def delete_config(self, dialog):
+        """Delete the selected configuration"""
+        if not hasattr(self, 'selected_config') or not self.selected_config.get():
+            return
+            
+        selected = self.selected_config.get()
+        if selected in self.config_map:
+            filename = self.config_map[selected]
+            confirm = messagebox.askyesno("Confirm Delete", 
+                                        f"Are you sure you want to delete configuration '{selected}'?", 
+                                        parent=dialog)
+            if confirm:
+                try:
+                    os.remove(os.path.join("saved_configs", filename))
+                    messagebox.showinfo("Success", f"Configuration '{selected}' deleted successfully", parent=dialog)
+                    dialog.destroy()
+                    # Reopen the load dialog to refresh the list
+                    self.load_configuration()
+                except Exception as e:
+                    messagebox.showerror("Delete Error", str(e), parent=dialog)
+                    
+    def do_load_config(self, dialog):
+        """Actually load the selected configuration"""
+        if not hasattr(self, 'selected_config') or not self.selected_config.get():
+            return
+            
+        selected = self.selected_config.get()
+        if selected in self.config_map:
+            filename = self.config_map[selected]
+            try:
+                with open(os.path.join("saved_configs", filename), 'r') as f:
+                    config = json.load(f)
+                    
+                # Apply loaded values to any visible input fields
+                if "data" in config:
+                    data = config["data"]
+                else:
+                    data = config  # Handle legacy format
+                    
+                for category, items in data.items():
+                    # Select the category to make it visible
+                    for i in range(self.category_listbox.size()):
+                        if self.category_listbox.get(i) == category:
+                            self.category_listbox.selection_clear(0, tk.END)
+                            self.category_listbox.selection_set(i)
+                            self.on_category_select(None)
+                            break
+                            
+                    # Now apply the values to visible frames
+                    for item_name, values in items.items():
+                        # Find the frame with this item
+                        for widget in self.config_detail_frame.winfo_children():
+                            if hasattr(widget, 'item') and widget.item["name"] == item_name and hasattr(widget, 'vars'):
+                                # Apply the values
+                                for name, value in values.items():
+                                    if name in widget.vars:
+                                        widget.vars[name].set(value)
+                                        
+                messagebox.showinfo("Success", f"Configuration '{selected}' loaded successfully", parent=dialog)
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Load Error", str(e), parent=dialog)
 
     def add_to_preview(self, item, inputs=None):
         """Add a configuration item to the preview tab"""
