@@ -238,6 +238,14 @@ class CiscoSwitchConfigurator:
         delay_entry = ttk.Entry(options_frame, textvariable=self.command_delay, width=5)
         delay_entry.pack(side=tk.LEFT)
         
+        # Add a Test Connection button
+        test_conn_button = ttk.Button(
+            options_frame,
+            text="Test Connection",
+            command=self.test_connection
+        )
+        test_conn_button.pack(side=tk.LEFT, padx=20)
+        
         # Add a button to clear the console
         clear_button = ttk.Button(
             options_frame,
@@ -1322,6 +1330,63 @@ class CiscoSwitchConfigurator:
         self.console_output.config(state=tk.DISABLED)
         # Focus back on the input field
         self.console_input.focus_set()
+
+    def test_connection(self):
+        """Test the connection by sending a simple command"""
+        if not self.connection:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        self.log_to_console("\n--- Testing connection ---\n")
+        
+        # Send a simple, harmless command
+        try:
+            # Clear any pending data in the buffer before testing
+            if self.connection_type.get() == "COM" and self.connection.is_open:
+                self.connection.reset_input_buffer()
+                self.connection.reset_output_buffer()
+                
+            # Send a test command based on connection type
+            if self.connection_type.get() == "COM":
+                self.connection.write("\r\n".encode())  # Just send a return
+                self.connection.flush()
+                time.sleep(0.5)  # Wait a bit longer for response
+                
+                # Check if we got any response
+                if self.connection.in_waiting:
+                    data = self.connection.read(self.connection.in_waiting).decode('utf-8', errors='replace')
+                    if data:
+                        self.log_to_console(data, from_device=True)
+                        self.log_to_console("\n--- Connection test successful! ---\n")
+                        return
+            else:  # SSH
+                self.ssh_shell.send("\n")  # Just send a return
+                time.sleep(0.5)  # Wait a bit longer for response
+                
+                # Check if we got any response
+                if self.ssh_shell.recv_ready():
+                    data = self.ssh_shell.recv(4096).decode('utf-8', errors='replace')
+                    if data:
+                        self.log_to_console(data, from_device=True)
+                        self.log_to_console("\n--- Connection test successful! ---\n")
+                        return
+            
+            # If we get here, we didn't get a response
+            self.log_to_console("\n--- No response from device. Connection may be inactive. ---\n")
+            
+            # Try sending a more explicit command
+            self.log_to_console("\n--- Trying with explicit command ---\n")
+            if self.connection_type.get() == "COM":
+                self.connection.write("show version\r\n".encode())
+                self.connection.flush()
+            else:
+                self.ssh_shell.send("show version\n")
+                
+            # The response will be handled by the normal read threads
+                
+        except Exception as e:
+            self.log_to_console(f"\n--- Connection test failed: {str(e)} ---\n")
+            messagebox.showerror("Connection Test Failed", f"Test failed: {str(e)}")
 
 
 if __name__ == "__main__":
