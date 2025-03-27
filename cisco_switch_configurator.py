@@ -1992,7 +1992,7 @@ class CiscoSwitchConfigurator:
         # Add to preview
         self.add_to_preview(item, input_values if input_values else None)
         
-        # Show a notification instead of switching tabs
+        # Show a notification in the bottom corner
         self.show_notification(f"Added '{item['name']}' to preview")
     
     def run_config_item(self, item, vars_dict):
@@ -2165,18 +2165,21 @@ class CiscoSwitchConfigurator:
             ttk.Label(self.switch_radios_frame, text="No switches available").pack(padx=5)
 
     def setup_notification_area(self):
-        """Setup a notification area at the bottom of the main window"""
+        """Setup a notification area at the top of the main window"""
+        # Create a frame at the top of the window
         self.notification_frame = ttk.Frame(self.root)
-        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
+        self.notification_frame.pack(fill=tk.X, side=tk.TOP, padx=10, pady=5)
         
         # Notification label in the middle
         self.notification_label = ttk.Label(
             self.notification_frame, 
             textvariable=self.notification_var,
-            font=("Arial", 10),
-            foreground="blue"
+            font=("Arial", 10, "bold"),  # Made bold
+            foreground="blue",
+            background="#f0f0f0",  # Light gray background
+            padding=(10, 5)  # Add padding
         )
-        self.notification_label.pack(side=tk.LEFT, padx=5)
+        self.notification_label.pack(side=tk.TOP, padx=5, pady=2)
         
         # Made by text on the right
         made_by_label = ttk.Label(
@@ -2185,11 +2188,15 @@ class CiscoSwitchConfigurator:
             font=("Arial", 10, "italic"),
             foreground="gray"
         )
-        made_by_label.pack(side=tk.RIGHT, padx=5)
+        made_by_label.pack(side=tk.RIGHT, padx=5, pady=2)
         
     def show_notification(self, message, duration=3000):
         """Show a notification message for a specified duration"""
+        # Set the message
         self.notification_var.set(message)
+        
+        # Make the notification label visible
+        self.notification_label.configure(foreground="blue")
         
         # Clear any existing scheduled clearing
         if hasattr(self, '_notification_after_id') and self._notification_after_id:
