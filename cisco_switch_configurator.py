@@ -775,7 +775,7 @@ class CiscoSwitchConfigurator:
         console_output = switch_data['console_output']
         
         if console_output:
-            # Make console editable temporarily
+            # Make console editable
             console_output.config(state=tk.NORMAL)
             
             # Get current cursor position
