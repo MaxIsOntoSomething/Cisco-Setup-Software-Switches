@@ -50,13 +50,21 @@ CONFIG_DATA = {
     "Stacking Configuration": [
         {
             "name": "Configure Stack-Mac Persistent",
-            "command": "Stack-mac persistent timer 0",
+            "command": [
+                "configure terminal",
+                "stack-mac persistent timer 0",
+                "end"
+            ],
             "description": "Ensures faster switchover time",
             "inputs": []
         },
         {
             "name": "Set Switch Priority",
-            "command": "Switch {switch_number} priority {priority}",
+            "command": [
+                "configure terminal",
+                "switch {switch_number} priority {priority}",
+                "end"
+            ],
             "description": "Set the priority of a switch in the stack. Higher priority becomes the master.",
             "inputs": [
                 {"name": "switch_number", "type": "int", "description": "Switch number (e.g. 1)"},
@@ -68,11 +76,12 @@ CONFIG_DATA = {
         {
             "name": "Configure Stackwise Virtual",
             "command": [
-                "Stackwise-virtual",
-                "Domain {domain_id}",
+                "configure terminal",
+                "stackwise-virtual",
+                "domain {domain_id}",
                 "exit",
-                "Interface range {interface_range}",
-                "Stackwise-virtual link 1",
+                "interface range {interface_range}",
+                "stackwise-virtual link 1",
                 "end"
             ],
             "description": "Configure Stackwise Virtual between two Cisco 9500 switches",
@@ -86,11 +95,13 @@ CONFIG_DATA = {
         {
             "name": "Configure VLAN Interface IP",
             "command": [
-                "Interface vlan {vlan_id}",
-                "Ip address {ip_address} {subnet_mask}",
-                "No shutdown",
+                "configure terminal",
+                "interface vlan {vlan_id}",
+                "ip address {ip_address} {subnet_mask}",
+                "no shutdown",
                 "exit",
-                "Ip default-gateway {gateway_ip}"
+                "ip default-gateway {gateway_ip}",
+                "end"
             ],
             "description": "Configure management IP via VLAN interface",
             "inputs": [
@@ -103,11 +114,13 @@ CONFIG_DATA = {
         {
             "name": "Configure Management Port IP",
             "command": [
-                "Interface gigabitethernet 0/0",
-                "Ip address {ip_address} {subnet_mask}",
-                "No shutdown",
+                "configure terminal",
+                "interface gigabitethernet 0/0",
+                "ip address {ip_address} {subnet_mask}",
+                "no shutdown",
                 "exit",
-                "Ip route vrf Mgmt-vrf 0.0.0.0 0.0.0.0 {gateway_ip}"
+                "ip route vrf Mgmt-vrf 0.0.0.0 0.0.0.0 {gateway_ip}",
+                "end"
             ],
             "description": "Configure management IP via dedicated management port",
             "inputs": [
@@ -120,7 +133,11 @@ CONFIG_DATA = {
     "System Settings": [
         {
             "name": "Configure Hostname",
-            "command": "Hostname {hostname}",
+            "command": [
+                "configure terminal",
+                "hostname {hostname}",
+                "end"
+            ],
             "description": "Set the hostname of the switch",
             "inputs": [
                 {"name": "hostname", "type": "string", "description": "Hostname for the switch (e.g. SWITCH01)"}
@@ -128,7 +145,11 @@ CONFIG_DATA = {
         },
         {
             "name": "Configure Domain Name",
-            "command": "Ip domain name {domain_name}",
+            "command": [
+                "configure terminal",
+                "ip domain name {domain_name}",
+                "end"
+            ],
             "description": "Set the domain name for the switch",
             "inputs": [
                 {"name": "domain_name", "type": "string", "description": "Domain name (e.g. example.com)"}
@@ -136,7 +157,11 @@ CONFIG_DATA = {
         },
         {
             "name": "Configure Enable Secret",
-            "command": "Enable secret level 15 {password}",
+            "command": [
+                "configure terminal",
+                "enable secret level 15 {password}",
+                "end"
+            ],
             "description": "Set the enable secret password",
             "inputs": [
                 {"name": "password", "type": "string", "description": "Secret password (e.g. StrongP@ss123)"}
@@ -145,10 +170,12 @@ CONFIG_DATA = {
         {
             "name": "Configure Console Password",
             "command": [
-                "Line console 0",
-                "Password {password}",
-                "Login",
-                "Logging synchronous"
+                "configure terminal",
+                "line console 0",
+                "password {password}",
+                "login",
+                "logging synchronous",
+                "end"
             ],
             "description": "Configure console port password",
             "inputs": [
@@ -160,10 +187,12 @@ CONFIG_DATA = {
         {
             "name": "Configure NTP via VLAN Interface",
             "command": [
-                "Ntp server {ntp_server} version 2",
-                "Clock timezone CET 1",
-                "Clock summer-time CEST recurring last Sun Mar 02:00 last Sun Oct 03:00",
-                "service timestamps log datetime localtime"
+                "configure terminal",
+                "ntp server {ntp_server} version 2",
+                "clock timezone CET 1",
+                "clock summer-time CEST recurring last Sun Mar 02:00 last Sun Oct 03:00",
+                "service timestamps log datetime localtime",
+                "end"
             ],
             "description": "Configure NTP via VLAN interface",
             "inputs": [
@@ -173,10 +202,12 @@ CONFIG_DATA = {
         {
             "name": "Configure NTP via Management Port",
             "command": [
-                "Ntp server vrf Mgmt-vrf {ntp_server} version 2",
-                "Clock timezone CET 1",
-                "Clock summer-time CEST recurring last Sun Mar 02:00 last Sun Oct 03:00",
-                "service timestamps log datetime localtime"
+                "configure terminal",
+                "ntp server vrf Mgmt-vrf {ntp_server} version 2",
+                "clock timezone CET 1",
+                "clock summer-time CEST recurring last Sun Mar 02:00 last Sun Oct 03:00",
+                "service timestamps log datetime localtime",
+                "end"
             ],
             "description": "Configure NTP via management port",
             "inputs": [
@@ -188,12 +219,14 @@ CONFIG_DATA = {
         {
             "name": "Configure SSH",
             "command": [
-                "Username {username} privilege 15 secret {password}",
-                "Crypto key generate rsa",
+                "configure terminal",
+                "username {username} privilege 15 secret {password}",
+                "crypto key generate rsa",
                 "2048",
-                "Ip ssh version 2",
-                "Ip ssh time-out {timeout}",
-                "Ip ssh authentication-retries {retries}"
+                "ip ssh version 2",
+                "ip ssh time-out {timeout}",
+                "ip ssh authentication-retries {retries}",
+                "end"
             ],
             "description": "Configure SSH for secure access",
             "inputs": [
@@ -206,25 +239,33 @@ CONFIG_DATA = {
         {
             "name": "Disable Telnet",
             "command": [
-                "Line vty 0 15",
-                "Login local",
-                "Transport input ssh"
+                "configure terminal",
+                "line vty 0 15",
+                "login local",
+                "transport input ssh",
+                "end"
             ],
             "description": "Disable Telnet access and only allow SSH",
             "inputs": []
         },
         {
             "name": "Enable Password Encryption",
-            "command": "Service password-encryption",
+            "command": [
+                "configure terminal",
+                "service password-encryption",
+                "end"
+            ],
             "description": "Encrypt all passwords in the configuration",
             "inputs": []
         },
         {
             "name": "Configure HTTPS and Disable HTTP",
             "command": [
-                "Ip http secure-server",
-                "No ip http server",
-                "ip http authentication local"
+                "configure terminal",
+                "ip http secure-server",
+                "no ip http server",
+                "ip http authentication local",
+                "end"
             ],
             "description": "Enable HTTPS and disable HTTP",
             "inputs": []
@@ -233,21 +274,31 @@ CONFIG_DATA = {
     "Network Settings": [
         {
             "name": "Enable UDLD",
-            "command": "Udld aggressive",
+            "command": [
+                "configure terminal",
+                "udld aggressive",
+                "end"
+            ],
             "description": "Enable Unidirectional Link Detection on fiber ports",
             "inputs": []
         },
         {
             "name": "Increase Log Buffer Size",
-            "command": "Logging buffered 100000",
+            "command": [
+                "configure terminal",
+                "logging buffered 100000",
+                "end"
+            ],
             "description": "Increase the buffer size for logging",
             "inputs": []
         },
         {
             "name": "Configure Error-Disable Recovery",
             "command": [
-                "Errdisable recovery interval 30",
-                "Errdisable recovery cause all"
+                "configure terminal",
+                "errdisable recovery interval 30",
+                "errdisable recovery cause all",
+                "end"
             ],
             "description": "Enable recovery from error-disable state",
             "inputs": []
@@ -257,10 +308,12 @@ CONFIG_DATA = {
         {
             "name": "Configure SNMPv2",
             "command": [
-                "Snmp-server community {community} ro",
-                "Snmp-server host {snmp_host} version 2c {community}",
-                "Snmp-server contact {contact}",
-                "Snmp-server location {location}"
+                "configure terminal",
+                "snmp-server community {community} ro",
+                "snmp-server host {snmp_host} version 2c {community}",
+                "snmp-server contact {contact}",
+                "snmp-server location {location}",
+                "end"
             ],
             "description": "Configure SNMPv2 read-only access",
             "inputs": [
@@ -273,9 +326,11 @@ CONFIG_DATA = {
         {
             "name": "Configure SNMPv3",
             "command": [
-                "Snmp-server view {view_name} 1 included",
-                "Snmp-server group {group_name} v3 priv read {view_name}",
-                "Snmp-server user {username} {group_name} v3 auth sha {auth_password} priv aes 128 {priv_password}"
+                "configure terminal",
+                "snmp-server view {view_name} 1 included",
+                "snmp-server group {group_name} v3 priv read {view_name}",
+                "snmp-server user {username} {group_name} v3 auth sha {auth_password} priv aes 128 {priv_password}",
+                "end"
             ],
             "description": "Configure SNMPv3 with authentication and encryption",
             "inputs": [
@@ -289,9 +344,11 @@ CONFIG_DATA = {
         {
             "name": "Configure SNMP Traps",
             "command": [
-                "Snmp-server enable traps snmp linkup linkdown",
-                "Snmp-server enable traps mac-notification change",
-                "Snmp-server source-interface traps gigabitethernet 0/0"
+                "configure terminal",
+                "snmp-server enable traps snmp linkup linkdown",
+                "snmp-server enable traps mac-notification change",
+                "snmp-server source-interface traps gigabitethernet 0/0",
+                "end"
             ],
             "description": "Enable SNMP traps for link up/down and MAC changes",
             "inputs": []
@@ -300,7 +357,11 @@ CONFIG_DATA = {
     "Syslog Configuration": [
         {
             "name": "Configure Syslog via VLAN Interface",
-            "command": "Logging host {syslog_server}",
+            "command": [
+                "configure terminal",
+                "logging host {syslog_server}",
+                "end"
+            ],
             "description": "Configure syslog server via VLAN interface",
             "inputs": [
                 {"name": "syslog_server", "type": "string", "description": "Syslog server IP (e.g. 192.168.1.200)"}
@@ -308,7 +369,11 @@ CONFIG_DATA = {
         },
         {
             "name": "Configure Syslog via Management Port",
-            "command": "Logging host {syslog_server} vrf Mgmt-vrf",
+            "command": [
+                "configure terminal",
+                "logging host {syslog_server} vrf Mgmt-vrf",
+                "end"
+            ],
             "description": "Configure syslog server via management port",
             "inputs": [
                 {"name": "syslog_server", "type": "string", "description": "Syslog server IP (e.g. 192.168.1.200)"}
@@ -319,15 +384,17 @@ CONFIG_DATA = {
         {
             "name": "Disable Unnecessary Services",
             "command": [
-                "No ip finger",
-                "No service dhcp",
-                "No ip domain lookup",
-                "No service pad",
-                "No service config",
-                "No lldp run",
-                "Ip arp proxy disable",
-                "Vtp mode transparent",
-                "No ip routing"
+                "configure terminal",
+                "no ip finger",
+                "no service dhcp",
+                "no ip domain lookup",
+                "no service pad",
+                "no service config",
+                "no lldp run",
+                "ip arp proxy disable",
+                "vtp mode transparent",
+                "no ip routing",
+                "end"
             ],
             "description": "Disable various services not needed for basic switch operation",
             "inputs": []
@@ -337,9 +404,12 @@ CONFIG_DATA = {
         {
             "name": "Configure LACP",
             "command": [
-                "Interface range {interface_range}",
-                "Channel-protocol lacp",
-                "Channel-group {channel_group} mode active"
+                "configure terminal",
+                "interface range {interface_range}",
+                "channel-protocol lacp",
+                "channel-group {channel_group} mode active",
+                "exit",
+                "end"
             ],
             "description": "Configure Link Aggregation Control Protocol",
             "inputs": [
@@ -352,8 +422,10 @@ CONFIG_DATA = {
         {
             "name": "Create VLAN",
             "command": [
-                "Vlan {vlan_id}",
-                "Name {vlan_name}"
+                "configure terminal",
+                "vlan {vlan_id}",
+                "name {vlan_name}",
+                "end"
             ],
             "description": "Create a new VLAN",
             "inputs": [
@@ -364,9 +436,11 @@ CONFIG_DATA = {
         {
             "name": "Configure VLAN Trunk",
             "command": [
-                "Interface {interface}",
-                "Description {description}",
-                "Switchport mode trunk"
+                "configure terminal",
+                "interface {interface}",
+                "description {description}",
+                "switchport mode trunk",
+                "end"
             ],
             "description": "Configure a port as a VLAN trunk",
             "inputs": [
@@ -377,11 +451,13 @@ CONFIG_DATA = {
         {
             "name": "Configure Trunk Port to Firewall/VMware",
             "command": [
-                "Interface {interface}",
-                "Description {description}",
-                "Switchport mode trunk",
+                "configure terminal",
+                "interface {interface}",
+                "description {description}",
+                "switchport mode trunk",
                 "spanning-tree portfast trunk",
-                "spanning-tree bpduguard enable"
+                "spanning-tree bpduguard enable",
+                "end"
             ],
             "description": "Configure a trunk port to Firewall, SBC, VMware or Hyper-V",
             "inputs": [
@@ -392,12 +468,14 @@ CONFIG_DATA = {
         {
             "name": "Configure Access Port",
             "command": [
-                "Interface {interface}",
-                "Description {description}",
-                "Switchport mode access",
-                "Switchport access vlan {vlan_id}",
-                "Spanning-tree portfast",
-                "Spanning-tree bpduguard enable"
+                "configure terminal",
+                "interface {interface}",
+                "description {description}",
+                "switchport mode access",
+                "switchport access vlan {vlan_id}",
+                "spanning-tree portfast",
+                "spanning-tree bpduguard enable",
+                "end"
             ],
             "description": "Configure an access port",
             "inputs": [
@@ -409,8 +487,10 @@ CONFIG_DATA = {
         {
             "name": "Disable Unknown Unicast Flooding",
             "command": [
-                "Interface {interface}",
-                "Switchport block unicast"
+                "configure terminal",
+                "interface {interface}",
+                "switchport block unicast",
+                "end"
             ],
             "description": "Disable unknown unicast flooding on a port",
             "inputs": [
@@ -421,7 +501,11 @@ CONFIG_DATA = {
     "Multicast Configuration": [
         {
             "name": "Enable Multicast Querier",
-            "command": "Ip igmp snooping querier",
+            "command": [
+                "configure terminal",
+                "ip igmp snooping querier",
+                "end"
+            ],
             "description": "Enable IGMP snooping querier",
             "inputs": []
         }
@@ -429,13 +513,21 @@ CONFIG_DATA = {
     "Spanning Tree Configuration": [
         {
             "name": "Enable Rapid-PVST",
-            "command": "Spanning-tree mode rapid-pvst",
+            "command": [
+                "configure terminal",
+                "spanning-tree mode rapid-pvst",
+                "end"
+            ],
             "description": "Enable Rapid-PVST spanning tree mode",
             "inputs": []
         },
         {
             "name": "Configure Root Bridge",
-            "command": "Spanning-tree VLAN {vlan_list} root primary",
+            "command": [
+                "configure terminal",
+                "spanning-tree vlan {vlan_list} root primary",
+                "end"
+            ],
             "description": "Set this switch as the root bridge for specific VLANs",
             "inputs": [
                 {"name": "vlan_list", "type": "string", "description": "List of VLANs (e.g. 1,10,20)"}
@@ -443,7 +535,11 @@ CONFIG_DATA = {
         },
         {
             "name": "Configure Backup Root Bridge",
-            "command": "Spanning-tree VLAN {vlan_list} root secondary",
+            "command": [
+                "configure terminal",
+                "spanning-tree vlan {vlan_list} root secondary",
+                "end"
+            ],
             "description": "Set this switch as the backup root bridge for specific VLANs",
             "inputs": [
                 {"name": "vlan_list", "type": "string", "description": "List of VLANs (e.g. 1,10,20)"}
@@ -454,9 +550,11 @@ CONFIG_DATA = {
         {
             "name": "Configure TAM Port",
             "command": [
-                "Interface {interface}",
-                "Duplex auto",
-                "Speed 10"
+                "configure terminal",
+                "interface {interface}",
+                "duplex auto",
+                "speed 10",
+                "end"
             ],
             "description": "Special port configuration for TAM (Time and Alarm Manager)",
             "inputs": [
@@ -466,8 +564,10 @@ CONFIG_DATA = {
         {
             "name": "Disable Unused Ports",
             "command": [
-                "Interface range {interface_range}",
-                "shutdown"
+                "configure terminal",
+                "interface range {interface_range}",
+                "shutdown",
+                "end"
             ],
             "description": "Disable unused switch ports",
             "inputs": [
@@ -479,9 +579,12 @@ CONFIG_DATA = {
         {
             "name": "Configure TFTP Archiving",
             "command": [
-                "Archive",
-                "Path tftp://{tftp_server}/$h-",
-                "Write-memory"
+                "configure terminal",
+                "archive",
+                "path tftp://{tftp_server}/$h-",
+                "write-memory",
+                "exit",
+                "end"
             ],
             "description": "Configure automatic archiving to TFTP server",
             "inputs": [
@@ -491,11 +594,13 @@ CONFIG_DATA = {
         {
             "name": "Configure TFTP Archiving via Management Port",
             "command": [
-                "Archive",
-                "Path tftp://{tftp_server}/$h-",
-                "Write-memory",
+                "configure terminal",
+                "archive",
+                "path tftp://{tftp_server}/$h-",
+                "write-memory",
                 "exit",
-                "ip tftp source-interface gigabitethernet 0/0"
+                "ip tftp source-interface gigabitethernet 0/0",
+                "end"
             ],
             "description": "Configure automatic archiving to TFTP server via management port",
             "inputs": [
@@ -505,11 +610,14 @@ CONFIG_DATA = {
         {
             "name": "Configure Configuration Change Logging",
             "command": [
+                "configure terminal",
                 "archive",
                 "log config",
                 "logging enable",
                 "hidekeys",
-                "notify syslog"
+                "notify syslog",
+                "exit",
+                "end"
             ],
             "description": "Enable logging of configuration changes",
             "inputs": []
@@ -704,8 +812,10 @@ CONFIG_DATA = {
         {
             "name": "Configure SPAN Port",
             "command": [
-                "Monitor session {session_id} source interface {source_interface} {direction}",
-                "Monitor session {session_id} destination interface {destination_interface} encapsulation replicate"
+                "configure terminal",
+                "monitor session {session_id} source interface {source_interface} {direction}",
+                "monitor session {session_id} destination interface {destination_interface} encapsulation replicate",
+                "end"
             ],
             "description": "Configure a SPAN (Switched Port Analyzer) port",
             "inputs": [
@@ -739,7 +849,11 @@ CONFIG_DATA = {
         },
         {
             "name": "Reset Interface",
-            "command": "default interface {interface}",
+            "command": [
+                "configure terminal",
+                "default interface {interface}",
+                "end"
+            ],
             "description": "Reset a specific interface to default settings",
             "inputs": [
                 {"name": "interface", "type": "text", "description": "Enter interface (e.g., GigabitEthernet1/0/1)"}

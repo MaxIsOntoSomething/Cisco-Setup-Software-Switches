@@ -41,7 +41,7 @@ class CiscoSwitchConfigurator:
         # Create variables for console options - needed for the first switch
         self.manual_mode = tk.BooleanVar(value=False)
         self.auto_execute = tk.BooleanVar(value=False)
-        self.command_delay = tk.DoubleVar(value=0.5)
+        self.command_delay = tk.DoubleVar(value=2.0)
         
         # Store preview items
         self.preview_items = []
@@ -203,7 +203,7 @@ class CiscoSwitchConfigurator:
             'queued_commands': [],
             'manual_mode': tk.BooleanVar(value=False),
             'auto_execute': tk.BooleanVar(value=False),
-            'command_delay': tk.DoubleVar(value=0.5),
+            'command_delay': tk.DoubleVar(value=2.0),
             'name': f"Switch {switch_num}",  # Default name
             'password_var': tk.StringVar()
         }
@@ -452,6 +452,14 @@ class CiscoSwitchConfigurator:
                 command=lambda: self.close_switch_tab(switch_num)
             )
             close_button.pack(side=tk.LEFT, padx=10)
+            
+        # Add Enter button to the top toolbar
+        enter_button = ttk.Button(
+            options_frame,
+            text="Enter ↵",
+            command=lambda: self.send_enter_keypress(switch_num)
+        )
+        enter_button.pack(side=tk.RIGHT, padx=10)
         
         # Clear console button
         clear_button = ttk.Button(
@@ -575,16 +583,20 @@ class CiscoSwitchConfigurator:
             else:
                 current_line = current_line.strip()
             
-            # Send the command
-            if current_line and not self.command_sending:
+            # Send the command or just an Enter keypress if no command
+            if not self.command_sending:
                 # Set flag to prevent duplicate sending
                 self.command_sending = True
                 
                 # Clear the line before sending
                 console_output.delete("end-2c linestart", "end-1c")
                 
-                # Send the command
-                self.send_command_for_switch(None, switch_num, current_line)
+                if current_line:
+                    # Send the command if there is one
+                    self.send_command_for_switch(None, switch_num, current_line)
+                else:
+                    # Just send Enter keypress if line is empty
+                    self.send_enter_keypress(switch_num)
                 
                 # Reset flag after a short delay
                 self.root.after(100, lambda: setattr(self, 'command_sending', False))
@@ -593,6 +605,32 @@ class CiscoSwitchConfigurator:
             
         # For regular typing, just let it happen
         return None
+
+    def send_enter_keypress(self, switch_num):
+        """Send just an Enter keypress to the switch"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        connection = switch_data['connection']
+        
+        if not connection:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        try:
+            # Log the action
+            self.log_to_console_for_switch(switch_num, "\n> [Sending Enter keypress]\n")
+            
+            # Send just a carriage return
+            if switch_data['connection_type'].get() == "COM":
+                connection.write(b"\r\n")
+                connection.flush()
+            else:
+                switch_data['ssh_shell'].send("\n")
+                
+        except Exception as e:
+            messagebox.showerror("Command Error", str(e))
 
     def send_command_for_switch(self, event=None, switch_num=1, command=None):
         """Send a command to a specific switch"""
@@ -794,10 +832,10 @@ class CiscoSwitchConfigurator:
                 # Our commands and messages in green
                 console_output.insert(tk.INSERT, text)
                 
-            # Move cursor to end
+            # Scroll to the end
             console_output.see(tk.END)
             
-            # Log to switch conversation log
+            # Log to file if logger exists
             if 'logger' in switch_data:
                 # Clean up the text for logging
                 log_text = text.strip()
@@ -809,6 +847,31 @@ class CiscoSwitchConfigurator:
             
             # Keep console editable
             console_output.config(state=tk.NORMAL)
+                
+    def clear_console_for_switch(self, switch_num):
+        """Clear the console output for a specific switch"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        console_output = switch_data['console_output']
+        
+        if console_output:
+            # Make console editable
+            console_output.config(state=tk.NORMAL)
+            
+            # Clear all content
+            console_output.delete(1.0, tk.END)
+            
+            # Add a message indicating console was cleared
+            console_output.insert(tk.END, "Console cleared.\n")
+            
+            # Keep console editable
+            console_output.config(state=tk.NORMAL)
+            
+            # Log to file if logger exists
+            if 'logger' in switch_data:
+                switch_data['logger'].info("=== Console cleared ===")
 
     def test_connection_for_switch(self, switch_num=1):
         """Test the connection for a specific switch"""
@@ -1846,37 +1909,46 @@ class CiscoSwitchConfigurator:
         
     def execute_selected_preview_items(self):
         """Execute all selected preview items"""
-        # Get the selected switch number
+        if not self.preview_items:
+            messagebox.showinfo("No Commands", "No commands in preview. Add some commands first.")
+            return
+            
+        # Check if connected
         switch_num = self.selected_switch.get()
-        
-        # Check if the selected switch is in the switch_tabs and connected
         if switch_num not in self.switch_tabs or not self.switch_tabs[switch_num]['connection']:
-            messagebox.showwarning("Not Connected", f"Selected switch is not connected")
+            messagebox.showwarning("Not Connected", "Selected switch is not connected")
             return
             
-        # Reference to the switch data
+        # Get the selected switch data
         switch_data = self.switch_tabs[switch_num]
-            
-        # Collect all selected items
-        selected_items = []
-        executed_item_ids = []  # Store IDs of items that will be executed
-        
-        for item in self.preview_items:
-            if self.preview_vars[item['id']].get():
-                selected_items.append(item)
-                executed_item_ids.append(item['id'])
-        
-        if not selected_items:
-            messagebox.showinfo("Information", "No configurations selected")
-            return
         
         # Switch to console tab for the selected switch
         self.notebook.select(switch_data['frame'])
         
-        # Store selected items for command sequencing (in the specific switch data)
+        # Clear the existing command queue
         switch_data['queued_commands'] = []
-        switch_data['executed_preview_items'] = executed_item_ids
         
+        # Keep track of selected items for marking as executed
+        switch_data['executed_preview_items'] = []
+        
+        # Get the selected items
+        selected_items = []
+        for preview_item in self.preview_items:
+            # Use preview_vars to check if item is selected
+            if self.preview_vars[preview_item['id']].get():
+                selected_items.append(preview_item)
+                switch_data['executed_preview_items'].append(preview_item['id'])
+                
+        # If no items selected, just execute all
+        if not selected_items:
+            selected_items = self.preview_items
+            for item in selected_items:
+                switch_data['executed_preview_items'].append(item['id'])
+                
+        if not selected_items:
+            messagebox.showinfo("No Commands", "No commands in preview. Add some commands first.")
+            return
+            
         # Build a flat list of all commands to execute
         for preview_item in selected_items:
             item = preview_item['item']
@@ -1885,6 +1957,9 @@ class CiscoSwitchConfigurator:
             commands = item["command"]
             if not isinstance(commands, list):
                 commands = [commands]
+            
+            # Process the commands to add configuration mode if needed
+            commands = self.prepare_commands_with_config_mode(commands)
             
             for cmd in commands:
                 try:
@@ -1931,7 +2006,7 @@ class CiscoSwitchConfigurator:
             self.log_to_console_for_switch(switch_num, "All commands executed.\n")
             
             # Mark executed items
-            if hasattr(switch_data, 'executed_preview_items') and switch_data['executed_preview_items']:
+            if 'executed_preview_items' in switch_data and switch_data['executed_preview_items']:
                 for item_id in switch_data['executed_preview_items']:
                     self.mark_item_executed(item_id)
                     
@@ -1961,7 +2036,9 @@ class CiscoSwitchConfigurator:
                 switch_data['queued_commands'].pop(0)
                 # Update the display
                 self.update_next_commands_display(switch_num)
-                delay_ms = int(switch_data['command_delay'].get() * 1000)
+                # Ensure delay is at least 2 seconds
+                delay_value = max(2.0, switch_data['command_delay'].get())
+                delay_ms = int(delay_value * 1000)
                 self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
             elif len(switch_data['queued_commands']) > 1:
                 # Manual mode but more commands - load the next one
@@ -1984,6 +2061,44 @@ class CiscoSwitchConfigurator:
                 
         except Exception as e:
             self.log_to_console_for_switch(switch_num, f"Error sending command: {e}\n")
+            
+    def prepare_commands_with_config_mode(self, commands):
+        """Prepare commands with proper configuration mode handling"""
+        # Check if these commands need configuration mode
+        needs_config_mode = False
+        needs_context_exit = False
+        context_commands = ["interface", "vlan", "line", "router", "dhcp pool", "access-list"]
+        
+        for cmd in commands:
+            # These commands typically require config mode
+            config_indicators = ["interface", "vlan", "ip route", "hostname", "username", 
+                               "line", "router", "access-list", "enable secret", "banner",
+                               "logging", "snmp-server", "service", "aaa", "errdisable",
+                               "spanning-tree", "monitor", "archive", "stack-mac"]
+                               
+            # If the command starts with any of the indicators, it needs config mode
+            if any(cmd.lower().startswith(indicator.lower()) for indicator in config_indicators):
+                needs_config_mode = True
+                
+            # If it's a context command, we need to exit the context
+            if any(cmd.lower().startswith(indicator.lower()) for indicator in context_commands):
+                needs_context_exit = True
+                
+        # If this sequence needs config mode, add the necessary commands
+        if needs_config_mode:
+            # Only add configure terminal if it's not already the first command
+            if not any(cmd.lower() == "configure terminal" for cmd in commands):
+                commands = ["configure terminal"] + commands
+            
+            # Add exit command if needed and not already present
+            if needs_context_exit and not any(cmd.lower() == "exit" for cmd in commands):
+                commands.append("exit")
+                
+            # Add end command at the end if not already there
+            if not any(cmd.lower() == "end" for cmd in commands):
+                commands.append("end")
+                
+        return commands
             
     def mark_item_executed(self, item_id):
         """Mark a preview item as executed with a checkmark"""
@@ -2066,6 +2181,9 @@ class CiscoSwitchConfigurator:
         if not isinstance(commands, list):
             commands = [commands]
             
+        # Process the commands to add configuration mode if needed
+        commands = self.prepare_commands_with_config_mode(commands)
+            
         # Switch to console tab for the selected switch
         self.notebook.select(self.switch_tabs[switch_num]['frame'])
         
@@ -2077,7 +2195,9 @@ class CiscoSwitchConfigurator:
                     # If auto-execute is enabled, send directly
                     if self.switch_tabs[switch_num]['auto_execute'].get():
                         self.send_command_to_switch(formatted_cmd, switch_num)
-                        time.sleep(self.switch_tabs[switch_num]['command_delay'].get())
+                        # Ensure delay is at least 2 seconds
+                        delay_seconds = max(2.0, self.switch_tabs[switch_num]['command_delay'].get())
+                        time.sleep(delay_seconds)
                     else:
                         # Otherwise, put in input field for manual execution
                         console_input = self.switch_tabs[switch_num]['console_input']
