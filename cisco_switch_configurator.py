@@ -54,6 +54,9 @@ class CiscoSwitchConfigurator:
         # Path to cat GIF
         self.cat_gif_path = "media/cat-work.gif"
         
+        # Flag to track command sending
+        self.command_sending = False
+        
         self.setup_ui()
         
     def setup_ui(self):
@@ -144,27 +147,37 @@ class CiscoSwitchConfigurator:
             return
             
         switch_data = self.switch_tabs[switch_num]
+        switch_name = switch_data['name']
+        
+        # Create a sanitized filename from the switch name
+        safe_name = "".join(c for c in switch_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_')
         
         # Create a file handler for this switch's conversation
-        conversation_handler = logging.FileHandler(
-            f"logging/switch_{switch_data['name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        )
+        log_filename = f"logging/{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        conversation_handler = logging.FileHandler(log_filename)
         conversation_handler.setLevel(logging.INFO)
         
-        # Create a formatter
+        # Create a formatter with timestamp
         formatter = logging.Formatter('%(asctime)s - %(message)s')
         conversation_handler.setFormatter(formatter)
         
         # Create a logger for this switch
         switch_logger = logging.getLogger(f'switch_{switch_num}')
         switch_logger.setLevel(logging.INFO)
+        
+        # Remove any existing handlers to avoid duplicates
+        for handler in switch_logger.handlers[:]:
+            switch_logger.removeHandler(handler)
+            
         switch_logger.addHandler(conversation_handler)
         
         # Store the logger in the switch data
         switch_data['logger'] = switch_logger
         
         # Log connection info
-        switch_logger.info(f"Connected to {switch_data['name']}")
+        switch_logger.info(f"=== Starting new session for {switch_name} ===")
+        switch_logger.info(f"Connected via {switch_data['connection_type'].get()}")
         
     def create_new_switch_tab(self):
         """Create a new tab for another switch"""
@@ -257,21 +270,17 @@ class CiscoSwitchConfigurator:
         baudrate_combo.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
         
         # SSH settings
-        ssh_frame = ttk.LabelFrame(dialog, text="SSH Settings")
-        ssh_frame.pack(fill=tk.X, padx=10, pady=10)
+        self.ssh_frame = ttk.LabelFrame(dialog, text="SSH Settings")
+        self.ssh_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ssh_host = tk.StringVar()
-        ssh_username = tk.StringVar()
-        ssh_password = tk.StringVar()
+        ttk.Label(self.ssh_frame, text="Host:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(self.ssh_frame, textvariable=self.ssh_host).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(ssh_frame, text="Host:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(ssh_frame, textvariable=ssh_host).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.ssh_frame, text="Username:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(self.ssh_frame, textvariable=self.ssh_username).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(ssh_frame, text="Username:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(ssh_frame, textvariable=ssh_username).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
-        
-        ttk.Label(ssh_frame, text="Password:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(ssh_frame, textvariable=ssh_password, show="*").grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.ssh_frame, text="Password:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(self.ssh_frame, textvariable=self.ssh_password, show="*").grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
         # Buttons
         button_frame = ttk.Frame(dialog)
@@ -453,8 +462,11 @@ class CiscoSwitchConfigurator:
         )
         console_output.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         console_output.tag_configure("device", foreground="#00CCCC")  # Light cyan for device responses
-        console_output.config(state=tk.DISABLED)
+        console_output.tag_configure("input", foreground="white")  # White for user input
         console_output.configure(font=("Courier New", 10))
+        
+        # Make console output interactive
+        console_output.bind("<Key>", lambda e: self.handle_console_key(e, switch_num))
         
         # Store the console output reference
         switch_data['console_output'] = console_output
@@ -490,15 +502,12 @@ class CiscoSwitchConfigurator:
         console_input = ttk.Entry(input_frame)
         console_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
-        # For first switch, use the main send_command method
-        if switch_num == 1:
-            console_input.bind("<Return>", self.send_command)
-            send_button = ttk.Button(input_frame, text="Send", command=self.send_command)
-        else:
-            console_input.bind("<Return>", lambda e, sn=switch_num: self.send_command_for_switch(e, sn))
-            send_button = ttk.Button(input_frame, text="Send", 
-                          command=lambda sn=switch_num: self.send_command_for_switch(None, sn))
-        
+        # Add Send button
+        send_button = ttk.Button(
+            input_frame,
+            text="Send",
+            command=lambda: self.send_command_for_switch(None, switch_num)
+        )
         send_button.pack(side=tk.RIGHT, padx=5)
         
         # Store the console input reference
@@ -529,12 +538,111 @@ class CiscoSwitchConfigurator:
         
         # Welcome message
         if switch_num == 1:
-            # For the first tab, we want to match the existing state
             self.log_to_console_for_switch(1, "Console ready. Connect to a device to begin.\n")
         else:
-            # For additional tabs, we'll use our new method
             self.log_to_console_for_switch(switch_num, "Console ready. Connect to a device to begin.\n")
+
+    def handle_console_key(self, event, switch_num):
+        """Handle key events in the console output"""
+        console_output = self.switch_tabs[switch_num]['console_output']
+        
+        # Get the current cursor position
+        current_pos = console_output.index(tk.INSERT)
+        last_line_start = console_output.index("end-2c linestart")
+        
+        # Only allow typing in the last line
+        if current_pos < last_line_start:
+            # Move cursor to end of last line
+            console_output.mark_set(tk.INSERT, "end-1c")
+            return "break"
+        
+        # Handle special keys
+        if event.keysym == "Return":
+            # Get the current line from the console
+            current_line = console_output.get("end-2c linestart", "end-1c")
             
+            # Remove the prompt if present
+            if current_line.startswith(">"):
+                current_line = current_line[1:].strip()
+            
+            # Send the command
+            if current_line and not self.command_sending:
+                # Set flag to prevent duplicate sending
+                self.command_sending = True
+                
+                # Clear the line before sending
+                console_output.delete("end-2c linestart", "end-1c")
+                # Send the command
+                self.send_command_for_switch(None, switch_num, current_line)
+                
+                # Reset flag after a short delay
+                self.root.after(100, lambda: setattr(self, 'command_sending', False))
+                
+            return "break"  # Prevent default behavior
+            
+        # For regular typing, just let it happen
+        return None
+
+    def send_command_for_switch(self, event=None, switch_num=1, command=None):
+        """Send a command to a specific switch"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        connection = switch_data['connection']
+        console_input = switch_data['console_input']
+        
+        if not connection:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        # Get command from input field if not provided
+        if command is None:
+            command = console_input.get()
+            if not command:
+                return
+                
+        # Log the command to the console
+        self.log_to_console_for_switch(switch_num, f"\n> {command}\n")
+        
+        # Send the command
+        try:
+            if switch_data['connection_type'].get() == "COM":
+                # Add proper line endings for Cisco devices
+                command_bytes = (command + "\r\n").encode()
+                connection.write(command_bytes)
+                connection.flush()
+            else:
+                switch_data['ssh_shell'].send(command + "\n")
+                
+            # Clear the input field
+            console_input.delete(0, tk.END)
+            
+            # If manual mode is enabled, don't process queued commands
+            if switch_data['manual_mode'].get():
+                return
+                
+            # If we're executing commands from the preview, check the next one
+            if switch_data.get('queued_commands'):
+                # Remove the current command from the queue if it matches
+                if switch_data['queued_commands'] and switch_data['queued_commands'][0] == command:
+                    switch_data['queued_commands'].pop(0)
+                    # Update the Next Commands display
+                    self.update_next_commands_display(switch_num)
+                
+                # If auto-execute, queue the next one
+                if switch_data['auto_execute'].get() and switch_data['queued_commands']:
+                    delay_ms = int(switch_data['command_delay'].get() * 1000)
+                    self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
+                # Otherwise load the next one for manual execution
+                elif switch_data['queued_commands']:
+                    console_input.delete(0, tk.END)
+                    console_input.insert(0, switch_data['queued_commands'][0])
+                    self.log_to_console_for_switch(switch_num, "Ready for next command. Press Enter or click Send to continue.\n")
+                
+        except Exception as e:
+            messagebox.showerror("Command Error", str(e))
+
     def send_login_password(self, switch_num):
         """Send the password from the password field to the device"""
         if switch_num not in self.switch_tabs:
@@ -579,7 +687,7 @@ class CiscoSwitchConfigurator:
         
         # Log the closure
         if 'logger' in switch_data:
-            switch_data['logger'].info("Closing switch tab")
+            switch_data['logger'].info("=== Session ended - Tab closed ===")
         
         # Disconnect if connected
         if switch_data['connection']:
@@ -611,17 +719,17 @@ class CiscoSwitchConfigurator:
         while connection and hasattr(connection, 'is_open') and connection.is_open:
             try:
                 # Wait a bit for data to arrive
-                time.sleep(0.2)
+                time.sleep(0.1)
                 
                 if connection.in_waiting:
                     data = connection.read(connection.in_waiting).decode('utf-8', errors='replace')
                     if data:
-                        self.log_to_console_for_switch(switch_num, data, from_device=True)
+                        # Use after() to update UI in the main thread
+                        self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
             except Exception as e:
-                self.log_to_console_for_switch(switch_num, f"Error reading from serial: {e}\n")
+                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, f"Error reading from serial: {e}\n"))
                 break
-            time.sleep(0.1)
-            
+
     def read_from_ssh_for_switch(self, switch_num):
         """Read data from SSH connection for a specific switch"""
         switch_data = self.switch_tabs[switch_num]
@@ -631,17 +739,17 @@ class CiscoSwitchConfigurator:
         while connection and ssh_shell:
             try:
                 # Wait a bit for data to arrive
-                time.sleep(0.2)
+                time.sleep(0.1)
                 
                 if ssh_shell.recv_ready():
                     data = ssh_shell.recv(4096).decode('utf-8', errors='replace')
                     if data:
-                        self.log_to_console_for_switch(switch_num, data, from_device=True)
+                        # Use after() to update UI in the main thread
+                        self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
             except Exception as e:
-                self.log_to_console_for_switch(switch_num, f"Error reading from SSH: {e}\n")
+                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, f"Error reading from SSH: {e}\n"))
                 break
-            time.sleep(0.1)
-            
+
     def log_to_console_for_switch(self, switch_num, text, from_device=False):
         """Log text to the console for a specific switch"""
         if switch_num not in self.switch_tabs:
@@ -651,158 +759,41 @@ class CiscoSwitchConfigurator:
         console_output = switch_data['console_output']
         
         if console_output:
+            # Make console editable
             console_output.config(state=tk.NORMAL)
             
-            # Apply different formatting based on source
+            # Get current cursor position
+            current_pos = console_output.index(tk.INSERT)
+            last_line_start = console_output.index("end-2c linestart")
+            
+            # If cursor is not at the end, move it there
+            if current_pos < last_line_start:
+                console_output.mark_set(tk.INSERT, "end-1c")
+            
+            # Insert the text at the current position
             if from_device:
                 # Device responses in light cyan
-                console_output.tag_config("device", foreground="#00CCCC")
-                console_output.insert(tk.END, text, "device")
-                # Log to switch conversation log
-                if 'logger' in switch_data:
-                    switch_data['logger'].info(f"Device: {text.strip()}")
+                console_output.insert(tk.INSERT, text, "device")
             else:
                 # Our commands and messages in green
-                console_output.insert(tk.END, text)
-                # Log to switch conversation log
-                if 'logger' in switch_data:
-                    switch_data['logger'].info(f"User: {text.strip()}")
+                console_output.insert(tk.INSERT, text)
                 
+            # Move cursor to end
             console_output.see(tk.END)
-            console_output.config(state=tk.DISABLED)
             
-    def send_command_for_switch(self, event=None, switch_num=1):
-        """Send a command to a specific switch"""
-        if switch_num not in self.switch_tabs:
-            return
+            # Log to switch conversation log
+            if 'logger' in switch_data:
+                # Clean up the text for logging
+                log_text = text.strip()
+                if log_text:  # Only log non-empty lines
+                    if from_device:
+                        switch_data['logger'].info(f"Device: {log_text}")
+                    else:
+                        switch_data['logger'].info(f"User: {log_text}")
             
-        switch_data = self.switch_tabs[switch_num]
-        connection = switch_data['connection']
-        console_input = switch_data['console_input']
-        
-        if not connection:
-            messagebox.showwarning("Not Connected", "Please connect to a switch first")
-            return
-            
-        command = console_input.get()
-        if not command:
-            return
-            
-        # Log the command to the console
-        self.log_to_console_for_switch(switch_num, f"\n> {command}\n")
-        
-        # Send the command
-        try:
-            if switch_data['connection_type'].get() == "COM":
-                # Add proper line endings for Cisco devices
-                connection.write((command + "\r\n").encode())
-                connection.flush()
-            else:
-                switch_data['ssh_shell'].send(command + "\n")
-                
-            # Clear the input field
-            console_input.delete(0, tk.END)
-            
-            # If manual mode is enabled, don't process queued commands
-            if switch_data['manual_mode'].get():
-                return
-                
-            # If we're executing commands from the preview, check the next one
-            if switch_data.get('queued_commands'):
-                # Remove the current command from the queue if it matches
-                if switch_data['queued_commands'] and switch_data['queued_commands'][0] == command:
-                    switch_data['queued_commands'].pop(0)
-                    # Update the Next Commands display
-                    self.update_next_commands_display(switch_num)
-                
-                # If auto-execute, queue the next one
-                if switch_data['auto_execute'].get() and switch_data['queued_commands']:
-                    delay_ms = int(switch_data['command_delay'].get() * 1000)
-                    self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
-                # Otherwise load the next one for manual execution
-                elif switch_data['queued_commands']:
-                    console_input.delete(0, tk.END)
-                    console_input.insert(0, switch_data['queued_commands'][0])
-                    self.log_to_console_for_switch(switch_num, "Ready for next command. Press Enter or click Send to continue.\n")
-                
-        except Exception as e:
-            messagebox.showerror("Command Error", str(e))
+            # Keep console editable
+            console_output.config(state=tk.NORMAL)
 
-    def check_for_next_command_for_switch(self, last_command, switch_num=1):
-        """Check if we should proceed to the next command for a specific switch"""
-        if switch_num not in self.switch_tabs:
-            return
-            
-        switch_data = self.switch_tabs[switch_num]
-        manual_mode = switch_data['manual_mode']
-        auto_execute = switch_data['auto_execute']
-        console_input = switch_data['console_input']
-        
-        # Initialize queued_commands if not present
-        if 'queued_commands' not in switch_data:
-            switch_data['queued_commands'] = []
-        queued_commands = switch_data['queued_commands']
-        
-        # Don't process queued commands if in manual mode
-        if manual_mode.get():
-            return
-            
-        if queued_commands and len(queued_commands) > 0 and not auto_execute.get():
-            # Remove the current command from the queue if it matches
-            if queued_commands and queued_commands[0] == last_command:
-                queued_commands.pop(0)
-            
-            # Wait a short time before loading the next command
-            if queued_commands:
-                console_input.delete(0, tk.END)
-                console_input.insert(0, queued_commands[0])
-                self.log_to_console_for_switch(switch_num, "Ready for next command. Press Enter or click Send to continue.\n")
-            else:
-                # All commands executed, check if we have pending executed items
-                if 'executed_preview_items' in switch_data and switch_data['executed_preview_items']:
-                    for item_id in switch_data['executed_preview_items']:
-                        self.mark_item_executed(item_id)
-                    switch_data['executed_preview_items'] = []
-                    
-                self.log_to_console_for_switch(switch_num, "All commands executed.\n")
-                # Show cat GIF when all commands are executed
-                self.show_cat_gif()
-                
-    def toggle_manual_mode_for_switch(self, switch_num=1):
-        """Toggle manual mode for a specific switch"""
-        if switch_num not in self.switch_tabs:
-            return
-            
-        switch_data = self.switch_tabs[switch_num]
-        manual_mode = switch_data['manual_mode']
-        console_input = switch_data['console_input']
-        
-        if manual_mode.get():
-            # In manual mode, clear queued commands for both the switch and main application
-            switch_data['queued_commands'] = []
-            
-            # Also clear the main application's queued commands if this is the main switch
-            if switch_num == 1 and hasattr(self, 'queued_commands'):
-                self.queued_commands = []
-                
-            console_input.focus_set()
-            console_input.delete(0, tk.END)
-            self.log_to_console_for_switch(switch_num, "Manual typing mode enabled. Type commands directly.\n")
-        else:
-            self.log_to_console_for_switch(switch_num, "Manual typing mode disabled. Using command queue.\n")
-            
-    def clear_console_for_switch(self, switch_num=1):
-        """Clear the console for a specific switch"""
-        if switch_num not in self.switch_tabs:
-            return
-            
-        switch_data = self.switch_tabs[switch_num]
-        console_output = switch_data['console_output']
-        
-        console_output.config(state=tk.NORMAL)
-        console_output.delete(1.0, tk.END)
-        console_output.config(state=tk.DISABLED)
-        
     def test_connection_for_switch(self, switch_num=1):
         """Test the connection for a specific switch"""
         if switch_num not in self.switch_tabs:
@@ -1708,10 +1699,35 @@ class CiscoSwitchConfigurator:
                                           text="No configurations added to preview.\nAdd configurations from the Configuration tab.")
         self.empty_preview_label.pack(pady=20)
 
-    def send_command(self, event=None):
-        """Send a command to the switch"""
-        # Forward to the switch-specific command for switch 1
-        self.send_command_for_switch(event, 1)
+    def send_command(self, switch_num, command):
+        """Send a command to a specific switch"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        
+        if not switch_data['connection']:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        try:
+            # Log the command to console
+            self.log_to_console_for_switch(switch_num, f"\n> {command}\n")
+            
+            # Format the command properly
+            formatted_command = command.strip() + "\r\n"
+            
+            if switch_data['connection_type'].get() == "COM":
+                # Send command via serial
+                switch_data['connection'].write(formatted_command.encode())
+                switch_data['connection'].flush()
+            else:
+                # Send command via SSH
+                switch_data['ssh_shell'].send(formatted_command)
+                
+        except Exception as e:
+            messagebox.showerror("Command Error", f"Error sending command: {e}")
+            self.program_logger.error(f"Error sending command to switch {switch_num}: {str(e)}")
 
     def populate_categories(self):
         """Populate the category listbox with categories from CONFIG_DATA"""
@@ -2381,6 +2397,10 @@ class CiscoSwitchConfigurator:
             
             # Show success message
             self.log_to_console_for_switch(switch_num, "Configuration saved successfully!\n")
+            
+            # Log session end
+            if 'logger' in switch_data:
+                switch_data['logger'].info("=== Session ended - Configuration saved ===")
             
             # Show the cat GIF
             self.show_cat_gif()

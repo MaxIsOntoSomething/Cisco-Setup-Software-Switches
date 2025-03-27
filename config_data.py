@@ -38,6 +38,13 @@ CONFIG_DATA = {
             "inputs": [
                 {"name": "password", "type": "string", "description": "Enable password (e.g. Cisco123!)"}
             ]
+        },
+        {
+            "name": "Enter Global Configuration Mode",
+            "command": "configure terminal",
+            "description": "Enter global configuration mode",
+            "inputs": []
+
         }
     ],
     "Stacking Configuration": [
