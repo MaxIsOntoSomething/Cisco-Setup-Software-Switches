@@ -708,5 +708,35 @@ CONFIG_DATA = {
                 {"name": "destination_interface", "type": "string", "description": "Destination interface (e.g. Gi1/0/24)"}
             ]
         }
+    ],
+    "Reset Commands": [
+        {
+            "name": "Reset to Factory Default",
+            "command": "write erase\nreload",
+            "description": "Reset the switch to factory default settings",
+            "inputs": []
+        },
+        {
+            "name": "Clear Running Config",
+            "command": "write erase\nreload",
+            "description": "Clear the running configuration",
+            "inputs": []
+        },
+        {
+            "name": "Reset Password",
+            "command": "config-register 0x2142\nreload\nenable\ncopy startup-config running-config\nenable secret {new_password}\nconfig-register 0x2102\nwrite memory\nreload",
+            "description": "Reset the enable password",
+            "inputs": [
+                {"name": "new_password", "type": "text", "description": "Enter new enable password"}
+            ]
+        },
+        {
+            "name": "Reset Interface",
+            "command": "default interface {interface}",
+            "description": "Reset a specific interface to default settings",
+            "inputs": [
+                {"name": "interface", "type": "text", "description": "Enter interface (e.g., GigabitEthernet1/0/1)"}
+            ]
+        }
     ]
 } 
