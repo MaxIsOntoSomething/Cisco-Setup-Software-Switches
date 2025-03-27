@@ -270,17 +270,22 @@ class CiscoSwitchConfigurator:
         baudrate_combo.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
         
         # SSH settings
-        self.ssh_frame = ttk.LabelFrame(dialog, text="SSH Settings")
-        self.ssh_frame.pack(fill=tk.X, padx=10, pady=10)
+        ssh_frame = ttk.LabelFrame(dialog, text="SSH Settings")
+        ssh_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(self.ssh_frame, text="Host:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(self.ssh_frame, textvariable=self.ssh_host).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        # Create local variables for SSH settings
+        ssh_host_var = tk.StringVar()
+        ssh_username_var = tk.StringVar()
+        ssh_password_var = tk.StringVar()
         
-        ttk.Label(self.ssh_frame, text="Username:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(self.ssh_frame, textvariable=self.ssh_username).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(ssh_frame, text="Host:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(ssh_frame, textvariable=ssh_host_var).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(self.ssh_frame, text="Password:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(self.ssh_frame, textvariable=self.ssh_password, show="*").grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(ssh_frame, text="Username:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(ssh_frame, textvariable=ssh_username_var).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(ssh_frame, text="Password:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(ssh_frame, textvariable=ssh_password_var, show="*").grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
         # Buttons
         button_frame = ttk.Frame(dialog)
@@ -289,7 +294,7 @@ class CiscoSwitchConfigurator:
         ttk.Button(button_frame, text="Connect", 
                   command=lambda: self.connect_switch_from_dialog(
                       switch_num, switch_name.get(), com_port.get(), baudrate.get(), 
-                      ssh_host.get(), ssh_username.get(), ssh_password.get(), dialog
+                      ssh_host_var.get(), ssh_username_var.get(), ssh_password_var.get(), dialog
                   )).pack(side=tk.RIGHT, padx=5)
         
         ttk.Button(button_frame, text="Cancel", 
@@ -513,6 +518,9 @@ class CiscoSwitchConfigurator:
         # Store the console input reference
         switch_data['console_input'] = console_input
         
+        # Bind Enter key to send command
+        console_input.bind("<Return>", lambda e: self.send_command_for_switch(e, switch_num))
+        
         # Add Next Commands section
         next_commands_frame = ttk.LabelFrame(main_frame, text="Next Commands")
         next_commands_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -561,9 +569,11 @@ class CiscoSwitchConfigurator:
             # Get the current line from the console
             current_line = console_output.get("end-2c linestart", "end-1c")
             
-            # Remove the prompt if present
+            # Remove the prompt if present and clean up the command
             if current_line.startswith(">"):
                 current_line = current_line[1:].strip()
+            else:
+                current_line = current_line.strip()
             
             # Send the command
             if current_line and not self.command_sending:
@@ -572,6 +582,7 @@ class CiscoSwitchConfigurator:
                 
                 # Clear the line before sending
                 console_output.delete("end-2c linestart", "end-1c")
+                
                 # Send the command
                 self.send_command_for_switch(None, switch_num, current_line)
                 
@@ -601,6 +612,9 @@ class CiscoSwitchConfigurator:
             command = console_input.get()
             if not command:
                 return
+                
+        # Remove any leading ">" from the command
+        command = command.lstrip(">").strip()
                 
         # Log the command to the console
         self.log_to_console_for_switch(switch_num, f"\n> {command}\n")
@@ -726,8 +740,9 @@ class CiscoSwitchConfigurator:
                     if data:
                         # Use after() to update UI in the main thread
                         self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
-            except Exception as e:
-                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, f"Error reading from serial: {e}\n"))
+            except (serial.SerialException, IOError):
+                error_msg = "Error reading from serial port"
+                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
                 break
 
     def read_from_ssh_for_switch(self, switch_num):
@@ -746,8 +761,9 @@ class CiscoSwitchConfigurator:
                     if data:
                         # Use after() to update UI in the main thread
                         self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
-            except Exception as e:
-                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, f"Error reading from SSH: {e}\n"))
+            except (paramiko.SSHException, IOError):
+                error_msg = "Error reading from SSH connection"
+                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
                 break
 
     def log_to_console_for_switch(self, switch_num, text, from_device=False):
@@ -759,7 +775,7 @@ class CiscoSwitchConfigurator:
         console_output = switch_data['console_output']
         
         if console_output:
-            # Make console editable
+            # Make console editable temporarily
             console_output.config(state=tk.NORMAL)
             
             # Get current cursor position
@@ -961,8 +977,7 @@ class CiscoSwitchConfigurator:
         ttk.Entry(self.ssh_frame, textvariable=self.ssh_username).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
         ttk.Label(self.ssh_frame, text="Password:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        password_entry = ttk.Entry(self.ssh_frame, textvariable=self.ssh_password, show="*")
-        password_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Entry(self.ssh_frame, textvariable=self.ssh_password, show="*").grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
         # Connection buttons
         button_frame = ttk.Frame(self.connection_frame)
@@ -2238,28 +2253,28 @@ class CiscoSwitchConfigurator:
         if not filename:
             return  # User canceled
             
-        # Create serializable data from preview items
-        export_data = []
-        for item in self.preview_items:
-            export_item = {
-                'item': item['item'],
-                'inputs': item['inputs'],
-                'selected': self.preview_vars[item['id']].get(),
-                'executed': item.get('executed', False)
-            }
-            export_data.append(export_item)
-            
         try:
+            # Create serializable data from preview items
+            export_data = []
+            for item in self.preview_items:
+                export_item = {
+                    'item': item['item'],
+                    'inputs': item['inputs'],
+                    'selected': self.preview_vars[item['id']].get(),
+                    'executed': item.get('executed', False)
+                }
+                export_data.append(export_item)
+            
             # Ensure the saved_previews directory exists
             os.makedirs("saved_previews", exist_ok=True)
             
             with open(filename, 'w') as f:
                 json.dump(export_data, f, indent=2)
-            self.show_notification(f"Preview exported to {os.path.basename(filename)}")
-            self.program_logger.info(f"Exported preview to {filename}")
+            self.show_notification("Preview exported to " + os.path.basename(filename))
+            self.program_logger.info("Exported preview to " + filename)
         except Exception as e:
-            messagebox.showerror("Export Error", f"Error exporting preview: {e}")
-            self.program_logger.error(f"Error exporting preview: {str(e)}")
+            messagebox.showerror("Export Error", "Error exporting preview: " + str(e))
+            self.program_logger.error("Error exporting preview: " + str(e))
             
     def import_preview(self):
         """Import preview items from a JSON file"""
@@ -2308,12 +2323,12 @@ class CiscoSwitchConfigurator:
                 if item_data.get('executed', False):
                     self.mark_item_executed(item_id)
                     
-            self.show_notification(f"Preview imported from {os.path.basename(filename)}")
-            self.program_logger.info(f"Imported preview from {filename}")
+            self.show_notification("Preview imported from " + os.path.basename(filename))
+            self.program_logger.info("Imported preview from " + filename)
             
         except Exception as e:
-            messagebox.showerror("Import Error", f"Error importing preview: {e}")
-            self.program_logger.error(f"Error importing preview: {str(e)}")
+            messagebox.showerror("Import Error", "Error importing preview: " + str(e))
+            self.program_logger.error("Error importing preview: " + str(e))
 
     def update_next_commands_display(self, switch_num):
         """Update the display of next commands for a specific switch"""
