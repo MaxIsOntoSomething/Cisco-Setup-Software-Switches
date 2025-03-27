@@ -5,3 +5,6 @@ __pycache__/
 
 # Configuration files
 saved_configs/
+saved_previews/
+media/logo.png
+logging/

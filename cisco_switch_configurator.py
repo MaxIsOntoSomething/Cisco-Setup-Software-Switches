@@ -6,6 +6,8 @@ import threading
 import time
 import serial
 import paramiko
+import logging
+from datetime import datetime
 from serial.tools import list_ports
 from config_data import CONFIG_DATA
 
@@ -15,9 +17,18 @@ class CiscoSwitchConfigurator:
         self.root.title("Cisco Switch Configurator")
         self.root.geometry("1000x700")
         
+        # Setup logging
+        self.setup_logging()
+        
         # Keep track of multiple switch instances
         self.switch_tabs = {}
         self.switch_count = 1
+        
+        # Create logging directory if it doesn't exist
+        os.makedirs("logging", exist_ok=True)
+        
+        # Initialize logging
+        self.setup_logging()
         
         self.connection = None
         self.connection_type = tk.StringVar(value="COM")
@@ -49,6 +60,21 @@ class CiscoSwitchConfigurator:
         # Create a frame for additional controls
         control_frame = ttk.Frame(self.root)
         control_frame.pack(fill=tk.X, side=tk.TOP, padx=10, pady=(10, 0))
+        
+        # Add logo to top left
+        try:
+            from PIL import Image, ImageTk
+            logo_path = "media/logo.png"
+            if os.path.exists(logo_path):
+                logo_image = Image.open(logo_path)
+                # Resize logo to 100x50 pixels
+                logo_image = logo_image.resize((100, 50), Image.Resampling.LANCZOS)
+                logo_photo = ImageTk.PhotoImage(logo_image)
+                logo_label = ttk.Label(control_frame, image=logo_photo)
+                logo_label.image = logo_photo  # Keep a reference
+                logo_label.pack(side=tk.LEFT, padx=5)
+        except Exception as e:
+            print(f"Error loading logo: {e}")
         
         # Add New Switch Tab button
         ttk.Button(control_frame, text="New Switch Tab", 
@@ -84,6 +110,62 @@ class CiscoSwitchConfigurator:
         # Setup notification area at the bottom
         self.setup_notification_area()
 
+    def setup_logging(self):
+        """Setup logging for both program and switch conversations"""
+        # Create logging directory if it doesn't exist
+        os.makedirs("logging", exist_ok=True)
+        
+        # Setup program logging
+        program_logger = logging.getLogger('program')
+        program_logger.setLevel(logging.INFO)
+        
+        # Create a file handler for program logging
+        program_handler = logging.FileHandler(
+            f"logging/program_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        program_handler.setLevel(logging.INFO)
+        
+        # Create a formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        program_handler.setFormatter(formatter)
+        
+        # Add the handler to the logger
+        program_logger.addHandler(program_handler)
+        
+        # Store the logger
+        self.program_logger = program_logger
+        
+        # Log program start
+        self.program_logger.info("Cisco Switch Configurator started")
+        
+    def setup_switch_logging(self, switch_num):
+        """Setup logging for a specific switch conversation"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        
+        # Create a file handler for this switch's conversation
+        conversation_handler = logging.FileHandler(
+            f"logging/switch_{switch_data['name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        conversation_handler.setLevel(logging.INFO)
+        
+        # Create a formatter
+        formatter = logging.Formatter('%(asctime)s - %(message)s')
+        conversation_handler.setFormatter(formatter)
+        
+        # Create a logger for this switch
+        switch_logger = logging.getLogger(f'switch_{switch_num}')
+        switch_logger.setLevel(logging.INFO)
+        switch_logger.addHandler(conversation_handler)
+        
+        # Store the logger in the switch data
+        switch_data['logger'] = switch_logger
+        
+        # Log connection info
+        switch_logger.info(f"Connected to {switch_data['name']}")
+        
     def create_new_switch_tab(self):
         """Create a new tab for another switch"""
         # Increment switch count
@@ -233,6 +315,9 @@ class CiscoSwitchConfigurator:
                 console_output.see(tk.END)
                 console_output.config(state=tk.DISABLED)
                 
+                # Setup logging for this switch
+                self.setup_switch_logging(switch_num)
+                
                 # Start a thread to read from serial
                 threading.Thread(target=lambda: self.read_from_serial_for_switch(switch_num), 
                                 daemon=True).start()
@@ -259,6 +344,9 @@ class CiscoSwitchConfigurator:
                 console_output.see(tk.END)
                 console_output.config(state=tk.DISABLED)
                 
+                # Setup logging for this switch
+                self.setup_switch_logging(switch_num)
+                
                 # Start a thread to read from SSH
                 threading.Thread(target=lambda: self.read_from_ssh_for_switch(switch_num), 
                                 daemon=True).start()
@@ -274,7 +362,8 @@ class CiscoSwitchConfigurator:
             
         except Exception as e:
             messagebox.showerror("Connection Error", str(e))
-
+            self.program_logger.error(f"Connection error for switch {switch_num}: {str(e)}")
+            
     def setup_console_tab(self, switch_num=1):
         """Set up the console tab for a specific switch"""
         # Get the frame for this switch
@@ -332,6 +421,14 @@ class CiscoSwitchConfigurator:
             command=lambda: self.test_connection_for_switch(switch_num)
         )
         test_conn_button.pack(side=tk.LEFT, padx=10)
+        
+        # Save Config and Exit button
+        save_exit_button = ttk.Button(
+            options_frame,
+            text="Save Config and Exit",
+            command=lambda: self.save_config_and_exit(switch_num)
+        )
+        save_exit_button.pack(side=tk.LEFT, padx=10)
         
         # Close tab button (only for additional tabs, not the first one)
         if switch_num > 1:
@@ -407,6 +504,29 @@ class CiscoSwitchConfigurator:
         # Store the console input reference
         switch_data['console_input'] = console_input
         
+        # Add Next Commands section
+        next_commands_frame = ttk.LabelFrame(main_frame, text="Next Commands")
+        next_commands_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Create a canvas with scrollbar for the next commands
+        canvas = tk.Canvas(next_commands_frame, height=100)
+        scrollbar = ttk.Scrollbar(next_commands_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Store the next commands frame reference
+        switch_data['next_commands_frame'] = scrollable_frame
+        
         # Welcome message
         if switch_num == 1:
             # For the first tab, we want to match the existing state
@@ -457,6 +577,10 @@ class CiscoSwitchConfigurator:
             
         switch_data = self.switch_tabs[switch_num]
         
+        # Log the closure
+        if 'logger' in switch_data:
+            switch_data['logger'].info("Closing switch tab")
+        
         # Disconnect if connected
         if switch_data['connection']:
             try:
@@ -475,6 +599,9 @@ class CiscoSwitchConfigurator:
         
         # Update the switch selector
         self.update_switch_selector()
+        
+        # Log the closure in program log
+        self.program_logger.info(f"Closed switch tab {switch_num}")
         
     def read_from_serial_for_switch(self, switch_num):
         """Read data from serial port for a specific switch"""
@@ -531,9 +658,15 @@ class CiscoSwitchConfigurator:
                 # Device responses in light cyan
                 console_output.tag_config("device", foreground="#00CCCC")
                 console_output.insert(tk.END, text, "device")
+                # Log to switch conversation log
+                if 'logger' in switch_data:
+                    switch_data['logger'].info(f"Device: {text.strip()}")
             else:
                 # Our commands and messages in green
                 console_output.insert(tk.END, text)
+                # Log to switch conversation log
+                if 'logger' in switch_data:
+                    switch_data['logger'].info(f"User: {text.strip()}")
                 
             console_output.see(tk.END)
             console_output.config(state=tk.DISABLED)
@@ -561,8 +694,8 @@ class CiscoSwitchConfigurator:
         # Send the command
         try:
             if switch_data['connection_type'].get() == "COM":
+                # Add proper line endings for Cisco devices
                 connection.write((command + "\r\n").encode())
-                # Flush the buffer
                 connection.flush()
             else:
                 switch_data['ssh_shell'].send(command + "\n")
@@ -572,29 +705,29 @@ class CiscoSwitchConfigurator:
             
             # If manual mode is enabled, don't process queued commands
             if switch_data['manual_mode'].get():
-                # If we're in manual mode, clear all queued commands to avoid repeating them
-                if hasattr(self, 'queued_commands'):
-                    self.queued_commands = []
                 return
                 
             # If we're executing commands from the preview, check the next one
-            if hasattr(self, 'queued_commands') and self.queued_commands:
+            if switch_data.get('queued_commands'):
                 # Remove the current command from the queue if it matches
-                if self.queued_commands and self.queued_commands[0] == command:
-                    self.queued_commands.pop(0)
+                if switch_data['queued_commands'] and switch_data['queued_commands'][0] == command:
+                    switch_data['queued_commands'].pop(0)
+                    # Update the Next Commands display
+                    self.update_next_commands_display(switch_num)
                 
                 # If auto-execute, queue the next one
-                if self.auto_execute.get() and self.queued_commands:
-                    self.root.after(int(self.command_delay.get() * 1000), self.execute_next_command_for_switch)
+                if switch_data['auto_execute'].get() and switch_data['queued_commands']:
+                    delay_ms = int(switch_data['command_delay'].get() * 1000)
+                    self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
                 # Otherwise load the next one for manual execution
-                elif self.queued_commands:
+                elif switch_data['queued_commands']:
                     console_input.delete(0, tk.END)
-                    console_input.insert(0, self.queued_commands[0])
+                    console_input.insert(0, switch_data['queued_commands'][0])
                     self.log_to_console_for_switch(switch_num, "Ready for next command. Press Enter or click Send to continue.\n")
                 
         except Exception as e:
             messagebox.showerror("Command Error", str(e))
-            
+
     def check_for_next_command_for_switch(self, last_command, switch_num=1):
         """Check if we should proceed to the next command for a specific switch"""
         if switch_num not in self.switch_tabs:
@@ -1172,6 +1305,56 @@ class CiscoSwitchConfigurator:
         self.switch_radios_frame = ttk.Frame(self.switch_selector_frame)
         self.switch_radios_frame.pack(fill=tk.X, pady=5, padx=10)
         
+        # Add Import/Export section
+        import_export_frame = ttk.LabelFrame(preview_container, text="Import/Export Preview")
+        import_export_frame.pack(fill=tk.X, pady=5)
+        
+        # Ensure the saved previews directory exists
+        os.makedirs("saved_previews", exist_ok=True)
+        
+        # Add buttons for import/export
+        ttk.Button(import_export_frame, text="Export Preview", 
+                  command=self.export_preview).pack(side=tk.LEFT, padx=10, pady=5)
+        ttk.Button(import_export_frame, text="Import Preview", 
+                  command=self.import_preview).pack(side=tk.LEFT, padx=10, pady=5)
+        
+        # Custom command entry section
+        custom_cmd_frame = ttk.LabelFrame(preview_container, text="Add Custom Command")
+        custom_cmd_frame.pack(fill=tk.X, pady=10)
+        
+        input_frame = ttk.Frame(custom_cmd_frame)
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(input_frame, text="Command:").pack(side=tk.LEFT, padx=5)
+        
+        # Command entry field
+        self.custom_command = tk.StringVar()
+        custom_cmd_entry = ttk.Entry(input_frame, textvariable=self.custom_command, width=60)
+        custom_cmd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # Category selection for custom commands
+        ttk.Label(input_frame, text="Category:").pack(side=tk.LEFT, padx=(10, 5))
+        self.custom_category = tk.StringVar(value="Custom Commands")
+        custom_category_entry = ttk.Entry(input_frame, textvariable=self.custom_category, width=20)
+        custom_category_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Position selector - where to add the command
+        position_frame = ttk.Frame(custom_cmd_frame)
+        position_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        self.add_position = tk.StringVar(value="end")
+        ttk.Radiobutton(position_frame, text="Add to end", variable=self.add_position, value="end").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(position_frame, text="Add to beginning", variable=self.add_position, value="start").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(position_frame, text="Add before selected", variable=self.add_position, value="before").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(position_frame, text="Add after selected", variable=self.add_position, value="after").pack(side=tk.LEFT, padx=5)
+        
+        # Add button for custom command
+        ttk.Button(position_frame, text="Add Command", 
+                  command=self.add_custom_command).pack(side=tk.RIGHT, padx=5)
+        
+        # Add buttons for moving items up/down in the list
+        self.add_move_buttons(preview_container)
+        
         # Top section - instructions and buttons
         top_frame = ttk.Frame(preview_container)
         top_frame.pack(fill=tk.X, pady=5)
@@ -1210,63 +1393,326 @@ class CiscoSwitchConfigurator:
         
         # Update the switch selector
         self.update_switch_selector()
-        
-    def update_switch_selector(self):
-        """Update the switch selector with connected switches"""
-        # Clear previous radio buttons
-        for widget in self.switch_radios_frame.winfo_children():
-            widget.destroy()
-            
-        # Add radio buttons for each connected switch
-        connected_switches = []
-        for switch_num, switch_data in self.switch_tabs.items():
-            if switch_data.get('connection'):
-                connected_switches.append(switch_num)
-                switch_name = switch_data.get('name', f"Switch {switch_num}")
-                ttk.Radiobutton(
-                    self.switch_radios_frame,
-                    text=switch_name,
-                    variable=self.selected_switch,
-                    value=switch_num
-                ).pack(side=tk.LEFT, padx=5)
-        
-        # If no connected switches, show a message
-        if not connected_switches:
-            ttk.Label(self.switch_radios_frame, 
-                     text="No connected switches",
-                     foreground="red").pack(pady=5)
-        # If the currently selected switch is not connected, select the first connected one
-        elif self.selected_switch.get() not in connected_switches and connected_switches:
-            self.selected_switch.set(connected_switches[0])
     
-    def setup_notification_area(self):
-        """Create a notification area at the bottom of the window"""
-        self.notification_frame = ttk.Frame(self.root)
-        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
-        self.notification_frame.pack_forget()  # Hide it initially
+    def add_move_buttons(self, parent_frame):
+        """Add buttons to move items up and down in the list"""
+        move_frame = ttk.LabelFrame(parent_frame, text="Reorder Selected Items")
+        move_frame.pack(fill=tk.X, pady=5)
         
-        self.notification_label = ttk.Label(
-            self.notification_frame, 
-            textvariable=self.notification_var,
-            background="#e6ffe6",  # Light green background
-            foreground="#006400",  # Dark green text
-            font=("Arial", 10),
-            padding=10
-        )
-        self.notification_label.pack(side=tk.RIGHT, padx=10, pady=5)
+        ttk.Button(move_frame, text="Move Selected Up", 
+                  command=self.move_selected_items_up).pack(side=tk.LEFT, padx=10, pady=5)
+        ttk.Button(move_frame, text="Move Selected Down", 
+                  command=self.move_selected_items_down).pack(side=tk.LEFT, padx=10, pady=5)
+    
+    def move_selected_items_up(self):
+        """Move all selected items up in the list"""
+        for i, item in enumerate(self.preview_items):
+            if i > 0 and self.preview_vars[item['id']].get():
+                self.move_preview_item_up(item['id'])
+                
+    def move_selected_items_down(self):
+        """Move all selected items down in the list"""
+        # Start from the end to avoid index issues
+        for i in range(len(self.preview_items) - 1, -1, -1):
+            item = self.preview_items[i]
+            if i < len(self.preview_items) - 1 and self.preview_vars[item['id']].get():
+                self.move_preview_item_down(item['id'])
+                
+    def move_preview_item_up(self, item_id):
+        """Move a preview item up in the list"""
+        # Find the item index
+        item_index = -1
+        for i, item in enumerate(self.preview_items):
+            if item['id'] == item_id:
+                item_index = i
+                break
+                
+        if item_index > 0:
+            # Swap with the item above
+            self.preview_items[item_index], self.preview_items[item_index - 1] = \
+                self.preview_items[item_index - 1], self.preview_items[item_index]
+                
+            # Repack all items to reflect the new order
+            self.repack_preview_items()
+            
+    def move_preview_item_down(self, item_id):
+        """Move a preview item down in the list"""
+        # Find the item index
+        item_index = -1
+        for i, item in enumerate(self.preview_items):
+            if item['id'] == item_id:
+                item_index = i
+                break
+                
+        if item_index >= 0 and item_index < len(self.preview_items) - 1:
+            # Swap with the item below
+            self.preview_items[item_index], self.preview_items[item_index + 1] = \
+                self.preview_items[item_index + 1], self.preview_items[item_index]
+                
+            # Repack all items to reflect the new order
+            self.repack_preview_items()
+            
+    def add_custom_command(self):
+        """Add a custom command to the preview list"""
+        command = self.custom_command.get().strip()
+        category = self.custom_category.get().strip()
+        position = self.add_position.get()
         
-    def show_notification(self, message, duration=3000):
-        """Show a notification message at the bottom of the window for a limited time"""
-        self.notification_var.set(message)
-        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
+        if not command:
+            messagebox.showwarning("Input Error", "Please enter a command")
+            return
+            
+        if not category:
+            category = "Custom Commands"
+            
+        # Create a custom item dictionary similar to CONFIG_DATA structure
+        custom_item = {
+            "name": f"Custom Command",
+            "description": "User-defined command",
+            "command": command,
+            "custom": True  # Mark as custom
+        }
         
-        # Schedule to hide the notification after duration
-        self.root.after(duration, self.hide_notification)
+        # Get current selected item if position is before/after
+        selected_id = None
+        if position in ["before", "after"]:
+            for item_id, checked in self.preview_vars.items():
+                if checked.get():
+                    selected_id = item_id
+                    break
+                    
+            if selected_id is None:
+                messagebox.showwarning("Selection Error", f"Please select an item to add {position}")
+                return
         
-    def hide_notification(self):
-        """Hide the notification area"""
-        self.notification_frame.pack_forget()
+        # Add to preview based on position
+        if position == "end" or (position in ["before", "after"] and selected_id is None):
+            # Add to the end (normal behavior)
+            self.add_to_preview(custom_item, None)
+        elif position == "start":
+            # Add to beginning - need to reorder items after adding
+            new_id = self.add_to_preview(custom_item, None)
+            # Move this item to the top by rebuilding the preview_items list
+            self.move_preview_item_to_top(new_id)
+        elif position == "before" and selected_id is not None:
+            # Add before selected item
+            self.add_preview_item_relative(custom_item, None, selected_id, before=True)
+        elif position == "after" and selected_id is not None:
+            # Add after selected item
+            self.add_preview_item_relative(custom_item, None, selected_id, before=False)
+            
+        # Clear the command field for the next entry
+        self.custom_command.set("")
         
+        # Show notification
+        self.show_notification(f"Added custom command to preview")
+        
+    def move_preview_item_to_top(self, item_id):
+        """Move a preview item to the top of the list"""
+        # Find the item with this ID
+        item_to_move = None
+        for i, item in enumerate(self.preview_items):
+            if item['id'] == item_id:
+                item_to_move = item
+                self.preview_items.pop(i)
+                break
+                
+        if item_to_move:
+            # Insert at the beginning
+            self.preview_items.insert(0, item_to_move)
+            # Repack all items to reflect the new order
+            self.repack_preview_items()
+            
+    def add_preview_item_relative(self, item, inputs, reference_id, before=True):
+        """Add a preview item before or after another item"""
+        # Find the reference item position
+        ref_position = -1
+        for i, preview_item in enumerate(self.preview_items):
+            if preview_item['id'] == reference_id:
+                ref_position = i
+                break
+                
+        if ref_position == -1:
+            # Reference item not found, just add to the end
+            self.add_to_preview(item, inputs)
+            return
+            
+        # Add the new item
+        new_id = self.add_to_preview(item, inputs)
+        
+        # Find the position of the new item (it's at the end)
+        new_item = self.preview_items[-1]
+        
+        # Remove from the end
+        self.preview_items.pop()
+        
+        # Insert at the correct position
+        if before:
+            self.preview_items.insert(ref_position, new_item)
+        else:
+            self.preview_items.insert(ref_position + 1, new_item)
+            
+        # Repack all items
+        self.repack_preview_items()
+        
+        return new_id
+        
+    def repack_preview_items(self):
+        """Repack all preview items to reflect their order in self.preview_items"""
+        # Unpack all items
+        for item in self.preview_items:
+            item['frame'].pack_forget()
+            
+        # Repack in the current order
+        for item in self.preview_items:
+            item['frame'].pack(fill=tk.X, padx=5, pady=2)
+
+    def add_to_preview(self, item, inputs=None):
+        """Add a configuration item to the preview tab"""
+        # Remove empty label if present
+        if hasattr(self, 'empty_preview_label') and self.empty_preview_label.winfo_exists():
+            self.empty_preview_label.destroy()
+        
+        # Create a frame for this preview item
+        item_frame = ttk.Frame(self.preview_scrollable_frame)
+        item_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        # Add a checkbutton
+        var = tk.BooleanVar(value=True)
+        check = ttk.Checkbutton(item_frame, variable=var)
+        check.pack(side=tk.LEFT, padx=(5, 10))
+        
+        # Create a label for the item
+        category_name = next((cat for cat, items in CONFIG_DATA.items() 
+                             if item in items), "Custom")
+        
+        label_text = f"{category_name} > {item['name']}"
+        if inputs:
+            # Format command with inputs
+            if isinstance(item['command'], list):
+                commands = []
+                for cmd in item['command']:
+                    try:
+                        commands.append(cmd.format(**inputs))
+                    except KeyError:
+                        commands.append(cmd)  # Keep original if format fails
+                command_text = "\n".join(commands)
+            else:
+                try:
+                    command_text = item['command'].format(**inputs)
+                except KeyError:
+                    command_text = item['command']  # Keep original if format fails
+            
+            # Add input information to label
+            input_text = ", ".join([f"{k}={v}" for k, v in inputs.items()])
+            label_text += f" ({input_text})"
+        else:
+            # Just display the raw command
+            if isinstance(item['command'], list):
+                command_text = "\n".join(item['command'])
+            else:
+                command_text = item['command']
+        
+        label = ttk.Label(item_frame, text=label_text)
+        label.pack(side=tk.LEFT, padx=5, anchor=tk.W)
+        
+        # Store the preview item info including the checkbox variable
+        preview_id = len(self.preview_items)
+        self.preview_vars[preview_id] = var
+        
+        # Store the item and created widgets for later reference
+        preview_item = {
+            'id': preview_id,
+            'item': item,
+            'inputs': inputs,
+            'frame': item_frame,
+            'checkbox': check,
+            'label': label,
+            'command_text': command_text,
+            'executed': False
+        }
+        self.preview_items.append(preview_item)
+        
+        # Add Remove button
+        ttk.Button(item_frame, text="×", width=3,
+                  command=lambda i=preview_id: self.remove_preview_item(i)).pack(side=tk.RIGHT, padx=5)
+        
+        # Add move up/down buttons
+        move_frame = ttk.Frame(item_frame)
+        move_frame.pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(move_frame, text="↑", width=2,
+                  command=lambda i=preview_id: self.move_preview_item_up(i)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(move_frame, text="↓", width=2,
+                  command=lambda i=preview_id: self.move_preview_item_down(i)).pack(side=tk.LEFT, padx=1)
+        
+        # Add detailed command text in a collapsible frame
+        detail_frame = ttk.LabelFrame(item_frame, text="Command")
+        detail_frame.pack(fill=tk.X, padx=30, pady=5, after=label)
+        
+        # Add command text
+        cmd_label = ttk.Label(detail_frame, text=command_text, wraplength=800, justify=tk.LEFT)
+        cmd_label.pack(fill=tk.X, padx=5, pady=5, anchor=tk.W)
+        
+        # Update highlight based on checkbox
+        self.update_item_highlight(preview_id)
+        
+        # Bind checkbox to highlight update
+        var.trace_add("write", lambda *args, i=preview_id: self.update_item_highlight(i))
+        
+        return preview_id
+        
+    def update_item_highlight(self, item_id):
+        """Update the highlighting of a preview item based on its selection state"""
+        for item in self.preview_items:
+            if item['id'] == item_id:
+                is_selected = self.preview_vars[item_id].get()
+                
+                if is_selected:
+                    # Highlight in green
+                    item['frame'].configure(style="Selected.TFrame")
+                    item['label'].configure(style="Selected.TLabel")
+                else:
+                    # Normal styling
+                    item['frame'].configure(style="")
+                    item['label'].configure(style="")
+                break
+    
+    def remove_preview_item(self, item_id):
+        """Remove an item from the preview"""
+        for i, item in enumerate(self.preview_items):
+            if item['id'] == item_id:
+                # Destroy the frame
+                item['frame'].destroy()
+                # Remove from list and dict
+                self.preview_items.pop(i)
+                self.preview_vars.pop(item_id)
+                break
+        
+        # Show empty label if no items
+        if not self.preview_items:
+            self.empty_preview_label = ttk.Label(self.preview_scrollable_frame, 
+                                              text="No configurations added to preview.\nAdd configurations from the Configuration tab.")
+            self.empty_preview_label.pack(pady=20)
+    
+    def clear_preview_items(self):
+        """Clear all items from the preview"""
+        for item in self.preview_items:
+            item['frame'].destroy()
+        
+        self.preview_items = []
+        self.preview_vars = {}
+        
+        # Show empty label
+        self.empty_preview_label = ttk.Label(self.preview_scrollable_frame, 
+                                          text="No configurations added to preview.\nAdd configurations from the Configuration tab.")
+        self.empty_preview_label.pack(pady=20)
+
+    def send_command(self, event=None):
+        """Send a command to the switch"""
+        # Forward to the switch-specific command for switch 1
+        self.send_command_for_switch(event, 1)
+
     def populate_categories(self):
         """Populate the category listbox with categories from CONFIG_DATA"""
         for category in CONFIG_DATA.keys():
@@ -1419,6 +1865,9 @@ class CiscoSwitchConfigurator:
                 except Exception as e:
                     self.log_to_console_for_switch(switch_num, f"Error formatting command: {e}\n")
         
+        # Update the Next Commands display
+        self.update_next_commands_display(switch_num)
+        
         # Execute the first command or queue all if auto-execute
         if switch_data['queued_commands']:
             console_input = switch_data['console_input']
@@ -1431,7 +1880,7 @@ class CiscoSwitchConfigurator:
                 console_input.delete(0, tk.END)
                 console_input.insert(0, switch_data['queued_commands'][0])
                 self.log_to_console_for_switch(switch_num, "Ready to execute command. Press Enter or click Send to continue.\n")
-                
+
     def execute_next_command_for_switch(self, switch_num):
         """Execute the next command in the queue for a specific switch"""
         if switch_num not in self.switch_tabs:
@@ -1469,8 +1918,8 @@ class CiscoSwitchConfigurator:
             
             # Send the command based on connection type
             if switch_data['connection_type'].get() == "COM":
+                # Add proper line endings for Cisco devices
                 switch_data['connection'].write((cmd + "\r\n").encode())
-                # Flush the buffer
                 switch_data['connection'].flush()
             else:
                 switch_data['ssh_shell'].send(cmd + "\n")
@@ -1479,6 +1928,8 @@ class CiscoSwitchConfigurator:
             if switch_data['auto_execute'].get() and len(switch_data['queued_commands']) > 1:
                 # Remove the command we just executed
                 switch_data['queued_commands'].pop(0)
+                # Update the display
+                self.update_next_commands_display(switch_num)
                 delay_ms = int(switch_data['command_delay'].get() * 1000)
                 self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
             elif len(switch_data['queued_commands']) > 1:
@@ -1487,6 +1938,8 @@ class CiscoSwitchConfigurator:
                 
                 # Remove the command we just executed
                 switch_data['queued_commands'].pop(0)
+                # Update the display
+                self.update_next_commands_display(switch_num)
                 
                 # Load the next command
                 console_input.delete(0, tk.END)
@@ -1495,6 +1948,8 @@ class CiscoSwitchConfigurator:
             else:
                 # Only one command left, remove it after execution
                 switch_data['queued_commands'].pop(0)
+                # Update the display
+                self.update_next_commands_display(switch_num)
                 
         except Exception as e:
             self.log_to_console_for_switch(switch_num, f"Error sending command: {e}\n")
@@ -1687,98 +2142,307 @@ class CiscoSwitchConfigurator:
                                           text="No configurations added to preview.\nAdd configurations from the Configuration tab.")
         self.empty_preview_label.pack(pady=20)
 
-    def send_command(self, event=None):
-        """Send a command to the switch"""
-        # Forward to the switch-specific command for switch 1
-        self.send_command_for_switch(event, 1)
-
-    def add_to_preview(self, item, inputs=None):
-        """Add a configuration item to the preview tab"""
-        # Remove empty label if present
-        if hasattr(self, 'empty_preview_label') and self.empty_preview_label.winfo_exists():
-            self.empty_preview_label.destroy()
-        
-        # Create a frame for this preview item
-        item_frame = ttk.Frame(self.preview_scrollable_frame)
-        item_frame.pack(fill=tk.X, padx=5, pady=2)
-        
-        # Add a checkbutton
-        var = tk.BooleanVar(value=True)
-        check = ttk.Checkbutton(item_frame, variable=var)
-        check.pack(side=tk.LEFT, padx=(5, 10))
-        
-        # Create a label for the item
-        category_name = next((cat for cat, items in CONFIG_DATA.items() 
-                             if item in items), "Unknown")
-        
-        label_text = f"{category_name} > {item['name']}"
-        if inputs:
-            # Format command with inputs
-            if isinstance(item['command'], list):
-                commands = []
-                for cmd in item['command']:
-                    try:
-                        commands.append(cmd.format(**inputs))
-                    except KeyError:
-                        commands.append(cmd)  # Keep original if format fails
-                command_text = "\n".join(commands)
-            else:
-                try:
-                    command_text = item['command'].format(**inputs)
-                except KeyError:
-                    command_text = item['command']  # Keep original if format fails
+    def update_switch_selector(self):
+        """Update the switch selector with available switches"""
+        # Clear any existing radio buttons
+        for widget in self.switch_radios_frame.winfo_children():
+            widget.destroy()
             
-            # Add input information to label
-            input_text = ", ".join([f"{k}={v}" for k, v in inputs.items()])
-            label_text += f" ({input_text})"
-        else:
-            # Just display the raw command
-            if isinstance(item['command'], list):
-                command_text = "\n".join(item['command'])
-            else:
-                command_text = item['command']
-        
-        label = ttk.Label(item_frame, text=label_text)
-        label.pack(side=tk.LEFT, padx=5, anchor=tk.W)
-        
-        # Store the preview item info including the checkbox variable
-        preview_id = len(self.preview_items)
-        self.preview_vars[preview_id] = var
-        
-        # Store the item and created widgets for later reference
-        preview_item = {
-            'id': preview_id,
-            'item': item,
-            'inputs': inputs,
-            'frame': item_frame,
-            'checkbox': check,
-            'label': label,
-            'command_text': command_text,
-            'executed': False
-        }
-        self.preview_items.append(preview_item)
-        
-        # Add Remove button
-        ttk.Button(item_frame, text="×", width=3,
-                  command=lambda i=preview_id: self.remove_preview_item(i)).pack(side=tk.RIGHT, padx=5)
-        
-        # Add detailed command text in a collapsible frame
-        detail_frame = ttk.LabelFrame(item_frame, text="Command")
-        detail_frame.pack(fill=tk.X, padx=30, pady=5, after=label)
-        
-        # Add command text
-        cmd_label = ttk.Label(detail_frame, text=command_text, wraplength=800, justify=tk.LEFT)
-        cmd_label.pack(fill=tk.X, padx=5, pady=5, anchor=tk.W)
-        
-        # Update highlight based on checkbox
-        self.update_item_highlight(preview_id)
-        
-        # Bind checkbox to highlight update
-        var.trace_add("write", lambda *args, i=preview_id: self.update_item_highlight(i))
+        # Create new radio buttons for each switch
+        for switch_num, switch_data in self.switch_tabs.items():
+            switch_name = switch_data.get('name', f"Switch {switch_num}")
+            connection_status = "✓" if switch_data.get('connection') else "✗"
+            
+            ttk.Radiobutton(
+                self.switch_radios_frame, 
+                text=f"{switch_name} [{connection_status}]",
+                variable=self.selected_switch,
+                value=switch_num
+            ).pack(side=tk.LEFT, padx=5)
+            
+        # If no switches are available, show a message
+        if not self.switch_tabs:
+            ttk.Label(self.switch_radios_frame, text="No switches available").pack(padx=5)
 
+    def setup_notification_area(self):
+        """Setup a notification area at the bottom of the main window"""
+        self.notification_frame = ttk.Frame(self.root)
+        self.notification_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=5)
+        
+        # Notification label in the middle
+        self.notification_label = ttk.Label(
+            self.notification_frame, 
+            textvariable=self.notification_var,
+            font=("Arial", 10),
+            foreground="blue"
+        )
+        self.notification_label.pack(side=tk.LEFT, padx=5)
+        
+        # Made by text on the right
+        made_by_label = ttk.Label(
+            self.notification_frame,
+            text="Made by Maximilian IT SOL",
+            font=("Arial", 10, "italic"),
+            foreground="gray"
+        )
+        made_by_label.pack(side=tk.RIGHT, padx=5)
+        
+    def show_notification(self, message, duration=3000):
+        """Show a notification message for a specified duration"""
+        self.notification_var.set(message)
+        
+        # Clear any existing scheduled clearing
+        if hasattr(self, '_notification_after_id') and self._notification_after_id:
+            self.root.after_cancel(self._notification_after_id)
+            
+        # Schedule clearing of the notification
+        self._notification_after_id = self.root.after(duration, lambda: self.notification_var.set(""))
+
+    def export_preview(self):
+        """Export the current preview items to a JSON file"""
+        if not self.preview_items:
+            messagebox.showinfo("Export", "No preview items to export")
+            return
+            
+        # Create file dialog to get filename
+        filename = filedialog.asksaveasfilename(
+            initialdir="saved_previews", 
+            title="Export Preview",
+            filetypes=(("JSON files", "*.json"), ("All files", "*.*")),
+            defaultextension=".json"
+        )
+        
+        if not filename:
+            return  # User canceled
+            
+        # Create serializable data from preview items
+        export_data = []
+        for item in self.preview_items:
+            export_item = {
+                'item': item['item'],
+                'inputs': item['inputs'],
+                'selected': self.preview_vars[item['id']].get(),
+                'executed': item.get('executed', False)
+            }
+            export_data.append(export_item)
+            
+        try:
+            # Ensure the saved_previews directory exists
+            os.makedirs("saved_previews", exist_ok=True)
+            
+            with open(filename, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            self.show_notification(f"Preview exported to {os.path.basename(filename)}")
+            self.program_logger.info(f"Exported preview to {filename}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Error exporting preview: {e}")
+            self.program_logger.error(f"Error exporting preview: {str(e)}")
+            
+    def import_preview(self):
+        """Import preview items from a JSON file"""
+        # Create file dialog to get filename
+        filename = filedialog.askopenfilename(
+            initialdir="saved_previews", 
+            title="Import Preview",
+            filetypes=(("JSON files", "*.json"), ("All files", "*.*"))
+        )
+        
+        if not filename:
+            return  # User canceled
+            
+        try:
+            with open(filename, 'r') as f:
+                import_data = json.load(f)
+                
+            # Ask if user wants to append or replace
+            response = messagebox.askyesnocancel(
+                "Import Preview", 
+                "Do you want to append the imported items to the current preview?\n\n"
+                "Yes = Append to existing items\n"
+                "No = Replace existing items\n"
+                "Cancel = Abort import"
+            )
+            
+            if response is None:  # Cancel was clicked
+                return
+                
+            if response is False:  # No was clicked - replace
+                self.clear_preview_items()
+                
+            # Add imported items
+            for item_data in import_data:
+                item = item_data['item']
+                inputs = item_data['inputs']
+                
+                # Add to preview
+                item_id = self.add_to_preview(item, inputs)
+                
+                # Set selected state
+                if item_id in self.preview_vars:
+                    self.preview_vars[item_id].set(item_data.get('selected', True))
+                    
+                # Mark as executed if needed
+                if item_data.get('executed', False):
+                    self.mark_item_executed(item_id)
+                    
+            self.show_notification(f"Preview imported from {os.path.basename(filename)}")
+            self.program_logger.info(f"Imported preview from {filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Import Error", f"Error importing preview: {e}")
+            self.program_logger.error(f"Error importing preview: {str(e)}")
+
+    def update_next_commands_display(self, switch_num):
+        """Update the display of next commands for a specific switch"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        next_commands_frame = switch_data.get('next_commands_frame')
+        
+        if not next_commands_frame:
+            return
+            
+        # Clear existing labels
+        for widget in next_commands_frame.winfo_children():
+            widget.destroy()
+            
+        # Get queued commands
+        queued_commands = switch_data.get('queued_commands', [])
+        
+        # Create labels for each command
+        for i, cmd in enumerate(queued_commands):
+            # Create a frame for each command
+            cmd_frame = ttk.Frame(next_commands_frame)
+            cmd_frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            # Add command number
+            ttk.Label(cmd_frame, text=f"{i+1}.", width=3).pack(side=tk.LEFT, padx=(0, 5))
+            
+            # Add command text
+            ttk.Label(cmd_frame, text=cmd, wraplength=500, justify=tk.LEFT).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # Add "Use" button
+            ttk.Button(cmd_frame, text="Use", width=5,
+                      command=lambda c=cmd, sn=switch_num: self.use_next_command(c, sn)).pack(side=tk.RIGHT, padx=5)
+            
+    def use_next_command(self, command, switch_num):
+        """Use a command from the next commands list"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        console_input = switch_data['console_input']
+        
+        # Set the command in the input field
+        console_input.delete(0, tk.END)
+        console_input.insert(0, command)
+        
+        # Remove the command from the queue
+        if command in switch_data.get('queued_commands', []):
+            switch_data['queued_commands'].remove(command)
+            
+        # Update the display
+        self.update_next_commands_display(switch_num)
+        
+        # Focus the input field
+        console_input.focus_set()
+
+    def save_config_and_exit(self, switch_num):
+        """Save the configuration and exit the console tab"""
+        if switch_num not in self.switch_tabs:
+            return
+            
+        switch_data = self.switch_tabs[switch_num]
+        
+        if not switch_data['connection']:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        try:
+            # Send the save command
+            self.log_to_console_for_switch(switch_num, "\n> copy running-config startup-config\n")
+            
+            if switch_data['connection_type'].get() == "COM":
+                switch_data['connection'].write(b"copy running-config startup-config\r\n")
+                switch_data['connection'].flush()
+            else:
+                switch_data['ssh_shell'].send("copy running-config startup-config\n")
+                
+            # Wait a moment for the command to complete
+            time.sleep(2)
+            
+            # Show success message
+            self.log_to_console_for_switch(switch_num, "Configuration saved successfully!\n")
+            
+            # Show the cat GIF
+            self.show_cat_gif()
+            
+            # Close the tab
+            if switch_num > 1:
+                self.close_switch_tab(switch_num)
+            else:
+                # For the first switch, just disconnect but keep the tab
+                self.disconnect()
+                
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Error saving configuration: {e}")
+            self.program_logger.error(f"Error saving configuration for switch {switch_num}: {str(e)}")
+            
 
 if __name__ == "__main__":
     root = tk.Tk()
+    root.withdraw()  # Hide the main window initially
+    
+    # Create splash screen
+    splash = tk.Toplevel(root)
+    splash.title("Cisco Switch Configurator")
+    splash.geometry("400x300")
+    splash.overrideredirect(True)  # Remove window decorations
+    
+    # Center the splash screen
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = (screen_width - 400) // 2
+    y = (screen_height - 300) // 2
+    splash.geometry(f"400x300+{x}+{y}")
+    
+    # Create main frame
+    main_frame = ttk.Frame(splash)
+    main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    
+    # Add logo
+    try:
+        from PIL import Image, ImageTk
+        logo_path = "media/logo.png"
+        if os.path.exists(logo_path):
+            logo_image = Image.open(logo_path)
+            # Resize logo to 300x150 pixels
+            logo_image = logo_image.resize((300, 150), Image.Resampling.LANCZOS)
+            logo_photo = ImageTk.PhotoImage(logo_image)
+            logo_label = ttk.Label(main_frame, image=logo_photo)
+            logo_label.image = logo_photo  # Keep a reference
+            logo_label.pack(pady=(20, 10))
+    except Exception as e:
+        print(f"Error loading logo: {e}")
+        ttk.Label(main_frame, text="Cisco Switch Configurator", 
+                 font=("Arial", 24, "bold")).pack(pady=(20, 10))
+    
+    # Add "Made by" text
+    ttk.Label(main_frame, text="Made by Maximilian IT SOL", 
+             font=("Arial", 12, "italic"), foreground="gray").pack(pady=10)
+    
+    # Add loading text
+    ttk.Label(main_frame, text="Loading...", 
+             font=("Arial", 10)).pack(pady=10)
+    
+    # Function to close splash and show main window
+    def close_splash():
+        splash.destroy()
+        root.deiconify()  # Show the main window
+        
+    # Schedule closing after 3 seconds
+    root.after(3000, close_splash)
     
     # Create custom styles
     style = ttk.Style()
