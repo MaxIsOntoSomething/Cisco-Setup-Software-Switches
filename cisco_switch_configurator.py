@@ -12,80 +12,94 @@ from serial.tools import list_ports
 from config_data import CONFIG_DATA
 
 class CiscoSwitchConfigurator:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Cisco Switch Configurator")
-        self.root.geometry("1000x700")
+    def __init__(self, master=None):
+        # No super().__init__ call since this class doesn't inherit from anything
+        self.master = master
+        self.master.title("Cisco Switch Configurator")
+        self.master.geometry("1024x768")  # Set a reasonable default size
         
-        # Setup logging
-        self.setup_logging()
-        
-        # Keep track of multiple switch instances
-        self.switch_tabs = {}
-        self.switch_count = 1
-        
-        # Create logging directory if it doesn't exist
-        os.makedirs("logging", exist_ok=True)
-        
-        # Initialize logging
-        self.setup_logging()
-        
-        self.connection = None
-        self.connection_type = tk.StringVar(value="COM")
-        self.com_port = tk.StringVar()
-        self.ssh_host = tk.StringVar()
-        self.ssh_username = tk.StringVar()
-        self.ssh_password = tk.StringVar()
+        # Initialize connection variables
+        self.ssh_username = tk.StringVar(value="admin")
+        self.ssh_password = tk.StringVar(value="")
+        self.ssh_host = tk.StringVar(value="")
+        self.ssh_port = tk.IntVar(value=22)
+        self.telnet_password = tk.StringVar(value="")
+        self.telnet_enable_password = tk.StringVar(value="")
+        self.com_port = tk.StringVar(value="")  
         self.baudrate = tk.IntVar(value=9600)
         
-        # Create variables for console options - needed for the first switch
+        # Initialize connection mode
+        self.conn_mode = tk.StringVar(value="ssh")
+        self.connection_type = tk.StringVar(value="COM")
+        
+        # Manual mode, auto-execute, and command delay for the first switch
         self.manual_mode = tk.BooleanVar(value=False)
-        self.auto_execute = tk.BooleanVar(value=False)
+        self.auto_execute = tk.BooleanVar(value=True)
         self.command_delay = tk.DoubleVar(value=2.0)
         
-        # Store preview items
-        self.preview_items = []
+        # Status bar initialization
+        self.status_var = tk.StringVar(value="Ready")
+        
+        # Create a list to store commands for execution
+        self.queued_commands = []
+        
+        # Dictionary to store preview data
+        self.preview_data = {}
         self.preview_vars = {}
         
-        # Create notification label
-        self.notification_var = tk.StringVar()
-        self.notification_frame = None
+        # Initial values for first switch - will be properly initialized in setup_ui
+        self.connection = None
+        self.serial_thread = None
+        self.ssh_thread = None
+        self.port_combobox = None
         
-        # Path to cat GIF
-        self.cat_gif_path = "media/cat-work.gif"
+        # For multiple switches
+        self.current_switch = 1
+        self.selected_switch = tk.IntVar(value=1)
         
-        # Flag to track command sending
-        self.command_sending = False
-        
+        # Set up the user interface
         self.setup_ui()
+        
+        # Create a folder for logs if it doesn't exist
+        os.makedirs('logs', exist_ok=True)
+        
+        # Set the icon
+        try:
+            icon_path = "media/icon.ico"
+            if os.path.exists(icon_path):
+                self.master.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Error setting icon: {e}")
+        
+        # Get screen dimensions and set window size
+        width = self.master.winfo_screenwidth() - 100
+        height = self.master.winfo_screenheight() - 100
+        self.master.geometry(f"{width}x{height}+50+50")
         
     def setup_ui(self):
         # Create a frame for additional controls
-        control_frame = ttk.Frame(self.root)
-        control_frame.pack(fill=tk.X, side=tk.TOP, padx=10, pady=(10, 0))
+        controls_frame = ttk.Frame(self.master, padding="10")
+        controls_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Add New Switch button
+        new_switch_button = ttk.Button(
+            controls_frame, 
+            text="Add New Switch", 
+            command=self.create_new_switch_tab
+        )
+        new_switch_button.pack(side=tk.LEFT, padx=5)
         
-        # Add logo to top left
-        try:
-            from PIL import Image, ImageTk
-            logo_path = "media/logo.png"
-            if os.path.exists(logo_path):
-                logo_image = Image.open(logo_path)
-                # Resize logo to 100x50 pixels
-                logo_image = logo_image.resize((100, 50), Image.Resampling.LANCZOS)
-                logo_photo = ImageTk.PhotoImage(logo_image)
-                logo_label = ttk.Label(control_frame, image=logo_photo)
-                logo_label.image = logo_photo  # Keep a reference
-                logo_label.pack(side=tk.LEFT, padx=5)
-        except Exception as e:
-            print(f"Error loading logo: {e}")
+        # Add Configuration Wizard button
+        wizard_button = ttk.Button(
+            controls_frame,
+            text="Configuration Wizard",
+            command=self.start_configuration_wizard
+        )
+        wizard_button.pack(side=tk.LEFT, padx=5)
         
-        # Add New Switch Tab button
-        ttk.Button(control_frame, text="New Switch Tab", 
-                  command=self.create_new_switch_tab).pack(side=tk.RIGHT)
-        
-        # Create notebook (tabs)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self.master)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Connection tab
         self.connection_frame = ttk.Frame(self.notebook)
@@ -99,20 +113,49 @@ class CiscoSwitchConfigurator:
         self.preview_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.preview_frame, text="Preview")
         
-        # No initial console tab - will be created when connecting
+        # Initialize the switch tabs
+        self.switch_tabs = {}
+        self.switch_tabs[1] = {
+            'name': 'Switch 1',
+            'connection': None,
+            'connection_type': tk.StringVar(value="COM"),
+            'manual_mode': self.manual_mode,
+            'auto_execute': self.auto_execute,
+            'command_delay': self.command_delay,
+            'queued_commands': [],
+            'frame': ttk.Frame(self.notebook)
+        }
         
-        # Setup Connection Tab
+        # Initialize preview system
+        self.preview_items = []
+        self.preview_vars = {}
+        self.custom_command = tk.StringVar()
+        self.add_position = tk.StringVar(value="end")
+        
+        # Setup tabs
         self.setup_connection_tab()
-        
-        # Setup Configuration Tab
         self.setup_configuration_tab()
-        
-        # Setup Preview Tab
         self.setup_preview_tab()
         
-        # Setup notification area at the bottom
+        # Setup console tab for first switch
+        self.setup_console_tab(1)
+        
+        # Add the first switch tab to the notebook
+        switch_name = self.switch_tabs[1]['name']
+        self.notebook.add(self.switch_tabs[1]['frame'], text=f"Console: {switch_name}")
+        
+        # Setup notification area
         self.setup_notification_area()
-
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Map function key F2 to import preview
+        self.master.bind("<F2>", lambda e: self.import_preview())
+        
+        # Map function key F3 to export preview
+        self.master.bind("<F3>", lambda e: self.export_preview())
+        
     def setup_logging(self):
         """Setup logging for both program and switch conversations"""
         # Create logging directory if it doesn't exist
@@ -182,8 +225,8 @@ class CiscoSwitchConfigurator:
     def create_new_switch_tab(self):
         """Create a new tab for another switch"""
         # Increment switch count
-        self.switch_count += 1
-        switch_num = self.switch_count
+        self.current_switch += 1
+        switch_num = self.current_switch
         
         # Create a new console frame for this switch
         new_console_frame = ttk.Frame(self.notebook)
@@ -219,10 +262,10 @@ class CiscoSwitchConfigurator:
         
     def show_connection_dialog(self, switch_num):
         """Show a dialog to configure connection for a specific switch"""
-        dialog = tk.Toplevel(self.root)
+        dialog = tk.Toplevel(self.master)
         dialog.title(f"Connect Switch {switch_num}")
         dialog.geometry("400x400")  # Made taller to accommodate the name field
-        dialog.transient(self.root)
+        dialog.transient(self.master)
         dialog.grab_set()
         
         switch_data = self.switch_tabs[switch_num]
@@ -382,6 +425,11 @@ class CiscoSwitchConfigurator:
         """Set up the console tab for a specific switch"""
         # Get the frame for this switch
         switch_data = self.switch_tabs[switch_num]
+        
+        # If the frame is not yet created, create it now
+        if 'frame' not in switch_data:
+            switch_data['frame'] = ttk.Frame(self.notebook)
+            
         console_frame = switch_data['frame']
         
         # Create frame for content
@@ -392,26 +440,27 @@ class CiscoSwitchConfigurator:
         options_frame = ttk.Frame(main_frame)
         options_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Initialize default name for the first switch if not exists
-        if switch_num == 1 and 'name' not in switch_data:
-            switch_data['name'] = "Switch 1"
+        # Initialize default name for the switch if not exists
+        if 'name' not in switch_data:
+            switch_data['name'] = f"Switch {switch_num}"
             
         # Switch name indicator
         switch_label = ttk.Label(options_frame, text=f"{switch_data['name']}", font=("Arial", 10, "bold"))
         switch_label.pack(side=tk.LEFT, padx=5)
         
-        # For the first switch, set manual_mode, auto_execute, and command_delay to the instance variables
-        if switch_num == 1:
-            switch_data['manual_mode'] = self.manual_mode
-            switch_data['auto_execute'] = self.auto_execute
-            switch_data['command_delay'] = self.command_delay
+        # For the first switch, manual_mode, auto_execute, and command_delay should already be set in __init__
+        # For additional switches, we need to create them
+        if switch_num > 1:
+            switch_data['manual_mode'] = tk.BooleanVar(value=False)
+            switch_data['auto_execute'] = tk.BooleanVar(value=True)
+            switch_data['command_delay'] = tk.DoubleVar(value=2.0)
+            switch_data['queued_commands'] = []
         
         # Manual typing mode checkbox
         manual_mode_check = ttk.Checkbutton(
             options_frame, 
             text="Manual Typing Mode",
-            variable=switch_data['manual_mode'],
-            command=lambda: self.toggle_manual_mode_for_switch(switch_num)
+            variable=switch_data['manual_mode']
         )
         manual_mode_check.pack(side=tk.LEFT, padx=10)
         
@@ -553,10 +602,7 @@ class CiscoSwitchConfigurator:
         switch_data['next_commands_frame'] = scrollable_frame
         
         # Welcome message
-        if switch_num == 1:
-            self.log_to_console_for_switch(1, "Console ready. Connect to a device to begin.\n")
-        else:
-            self.log_to_console_for_switch(switch_num, "Console ready. Connect to a device to begin.\n")
+        self.log_to_console_for_switch(switch_num, "Console ready. Connect to a device to begin.\n")
 
     def handle_console_key(self, event, switch_num):
         """Handle key events in the console output"""
@@ -599,7 +645,7 @@ class CiscoSwitchConfigurator:
                     self.send_enter_keypress(switch_num)
                 
                 # Reset flag after a short delay
-                self.root.after(100, lambda: setattr(self, 'command_sending', False))
+                self.master.after(100, lambda: setattr(self, 'command_sending', False))
                 
             return "break"  # Prevent default behavior
             
@@ -685,7 +731,7 @@ class CiscoSwitchConfigurator:
                 # If auto-execute, queue the next one
                 if switch_data['auto_execute'].get() and switch_data['queued_commands']:
                     delay_ms = int(switch_data['command_delay'].get() * 1000)
-                    self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
+                    self.master.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
                 # Otherwise load the next one for manual execution
                 elif switch_data['queued_commands']:
                     console_input.delete(0, tk.END)
@@ -777,10 +823,10 @@ class CiscoSwitchConfigurator:
                     data = connection.read(connection.in_waiting).decode('utf-8', errors='replace')
                     if data:
                         # Use after() to update UI in the main thread
-                        self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
+                        self.master.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
             except (serial.SerialException, IOError):
                 error_msg = "Error reading from serial port"
-                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
+                self.master.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
                 break
 
     def read_from_ssh_for_switch(self, switch_num):
@@ -798,10 +844,10 @@ class CiscoSwitchConfigurator:
                     data = ssh_shell.recv(4096).decode('utf-8', errors='replace')
                     if data:
                         # Use after() to update UI in the main thread
-                        self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
+                        self.master.after(0, lambda: self.log_to_console_for_switch(switch_num, data, from_device=True))
             except (paramiko.SSHException, IOError):
                 error_msg = "Error reading from SSH connection"
-                self.root.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
+                self.master.after(0, lambda: self.log_to_console_for_switch(switch_num, error_msg + "\n"))
                 break
 
     def log_to_console_for_switch(self, switch_num, text, from_device=False):
@@ -945,10 +991,10 @@ class CiscoSwitchConfigurator:
                 return
                 
             # Create a toplevel window for the GIF
-            gif_window = tk.Toplevel(self.root)
+            gif_window = tk.Toplevel(self.master)
             gif_window.title("All Commands Complete!")
             gif_window.geometry("400x350")
-            gif_window.transient(self.root)
+            gif_window.transient(self.master)
             
             # Try to load the GIF with PIL
             try:
@@ -1195,10 +1241,10 @@ class CiscoSwitchConfigurator:
             
     def get_switch_name_dialog(self):
         """Show a dialog to get the switch name"""
-        dialog = tk.Toplevel(self.root)
+        dialog = tk.Toplevel(self.master)
         dialog.title("Switch Name")
         dialog.geometry("300x150")
-        dialog.transient(self.root)
+        dialog.transient(self.master)
         dialog.grab_set()
         
         ttk.Label(dialog, text="Enter a name for this switch:").pack(pady=(20, 10), padx=20)
@@ -1229,7 +1275,7 @@ class CiscoSwitchConfigurator:
         dialog.bind("<Return>", lambda e: on_ok())
         
         # Wait for the dialog to be closed
-        self.root.wait_window(dialog)
+        self.master.wait_window(dialog)
         
         return result['name']
         
@@ -2039,7 +2085,7 @@ class CiscoSwitchConfigurator:
                 # Ensure delay is at least 2 seconds
                 delay_value = max(2.0, switch_data['command_delay'].get())
                 delay_ms = int(delay_value * 1000)
-                self.root.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
+                self.master.after(delay_ms, lambda: self.execute_next_command_for_switch(switch_num))
             elif len(switch_data['queued_commands']) > 1:
                 # Manual mode but more commands - load the next one
                 console_input = switch_data['console_input']
@@ -2318,7 +2364,7 @@ class CiscoSwitchConfigurator:
     def setup_notification_area(self):
         """Setup a notification area at the top of the main window"""
         # Create a frame at the top of the window
-        self.notification_frame = ttk.Frame(self.root)
+        self.notification_frame = ttk.Frame(self.master)
         self.notification_frame.pack(fill=tk.X, side=tk.TOP, padx=10, pady=5)
         
         # Notification label in the middle
@@ -2351,10 +2397,10 @@ class CiscoSwitchConfigurator:
         
         # Clear any existing scheduled clearing
         if hasattr(self, '_notification_after_id') and self._notification_after_id:
-            self.root.after_cancel(self._notification_after_id)
+            self.master.after_cancel(self._notification_after_id)
             
         # Schedule clearing of the notification
-        self._notification_after_id = self.root.after(duration, lambda: self.notification_var.set(""))
+        self._notification_after_id = self.master.after(duration, lambda: self.notification_var.set(""))
 
     def export_preview(self):
         """Export the current preview items to a JSON file"""
@@ -2551,6 +2597,284 @@ class CiscoSwitchConfigurator:
             messagebox.showerror("Save Error", f"Error saving configuration: {e}")
             self.program_logger.error(f"Error saving configuration for switch {switch_num}: {str(e)}")
             
+    def start_configuration_wizard(self):
+        """Start a step-by-step configuration wizard"""
+        # Check if a switch is connected
+        switch_num = self.selected_switch.get()
+        if switch_num not in self.switch_tabs or not self.switch_tabs[switch_num]['connection']:
+            messagebox.showwarning("Not Connected", "Please connect to a switch first")
+            return
+            
+        # Create the wizard dialog
+        wizard_dialog = tk.Toplevel(self.master)
+        wizard_dialog.title("Configuration Wizard")
+        wizard_dialog.geometry("600x500")
+        wizard_dialog.transient(self.master)
+        wizard_dialog.grab_set()
+        
+        # Create main frame with scrolling
+        main_frame = ttk.Frame(wizard_dialog)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create scrollable area
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Add instructions
+        ttk.Label(scrollable_frame, text="Configuration Wizard", font=("Arial", 16, "bold")).pack(pady=10)
+        ttk.Label(scrollable_frame, text="Select the configurations you want to apply:").pack(pady=5, anchor=tk.W)
+        
+        # Keep track of categories and checkboxes
+        category_frames = {}
+        item_vars = {}
+        
+        # Create category sections
+        for category_name, items in CONFIG_DATA.items():
+            # Skip troubleshooting and stack management categories
+            if category_name in ["Troubleshooting Commands", "Stack Management"]:
+                continue
+                
+            # Create a frame for this category
+            category_frame = ttk.LabelFrame(scrollable_frame, text=category_name)
+            category_frame.pack(fill=tk.X, pady=5, padx=5, anchor=tk.W)
+            category_frames[category_name] = category_frame
+            
+            # Add each item in the category
+            for item in items:
+                var = tk.BooleanVar(value=False)
+                item_vars[item["name"]] = var
+                
+                ttk.Checkbutton(
+                    category_frame, 
+                    text=item["name"], 
+                    variable=var
+                ).pack(anchor=tk.W, padx=10, pady=2)
+        
+        # Add buttons at the bottom
+        button_frame = ttk.Frame(wizard_dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(
+            button_frame, 
+            text="Start Configuration",
+            command=lambda: self.execute_wizard_configs(item_vars, wizard_dialog, switch_num)
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            button_frame, 
+            text="Cancel", 
+            command=wizard_dialog.destroy
+        ).pack(side=tk.RIGHT, padx=5)
+        
+    def execute_wizard_configs(self, item_vars, wizard_dialog, switch_num):
+        """Execute configurations selected in the wizard"""
+        wizard_dialog.destroy()
+        
+        # Get the switch data
+        switch_data = self.switch_tabs[switch_num]
+        
+        # Switch to console tab
+        self.notebook.select(switch_data['frame'])
+        
+        # Build list of selected configurations
+        selected_configs = []
+        
+        for category_name, items in CONFIG_DATA.items():
+            # Skip troubleshooting and stack management categories
+            if category_name in ["Troubleshooting Commands", "Stack Management"]:
+                continue
+                
+            for item in items:
+                if item["name"] in item_vars and item_vars[item["name"]].get():
+                    selected_configs.append(item)
+        
+        if not selected_configs:
+            messagebox.showinfo("No Configurations", "No configurations were selected")
+            return
+        
+        # Start the configuration process
+        self.run_wizard_step(0, selected_configs, switch_num)
+        
+    def run_wizard_step(self, index, configs, switch_num):
+        """Run a specific step in the wizard process"""
+        # Check if we've completed all configs
+        if index >= len(configs):
+            messagebox.showinfo("Configuration Complete", "All selected configurations have been applied!")
+            return
+            
+        # Get the current config item
+        item = configs[index]
+        
+        # Create dialog to confirm this step
+        confirm_dialog = tk.Toplevel(self.master)
+        confirm_dialog.title(f"Configure: {item['name']}")
+        confirm_dialog.geometry("500x400")
+        confirm_dialog.transient(self.master)
+        confirm_dialog.grab_set()
+        
+        # Create frame for content
+        main_frame = ttk.Frame(confirm_dialog)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Add item description
+        ttk.Label(main_frame, text=item['name'], font=("Arial", 14, "bold")).pack(pady=5)
+        ttk.Label(main_frame, text=item['description']).pack(pady=5, fill=tk.X)
+        
+        # Frame for input fields if needed
+        input_frame = ttk.Frame(main_frame)
+        input_frame.pack(fill=tk.X, pady=10)
+        
+        # Dictionary to store input variables
+        input_vars = {}
+        
+        # Add input fields if needed
+        if item.get('inputs'):
+            for input_field in item['inputs']:
+                field_frame = ttk.Frame(input_frame)
+                field_frame.pack(fill=tk.X, pady=5)
+                
+                ttk.Label(field_frame, text=f"{input_field['description']}:").pack(side=tk.LEFT, padx=5)
+                
+                var = tk.StringVar()
+                input_vars[input_field['name']] = var
+                
+                entry = ttk.Entry(field_frame, textvariable=var, width=30)
+                entry.pack(side=tk.RIGHT, padx=5)
+        
+        # Show command preview
+        preview_frame = ttk.LabelFrame(main_frame, text="Command Preview")
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        preview_text = tk.Text(preview_frame, height=8, wrap=tk.WORD)
+        preview_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Format command for preview
+        if isinstance(item['command'], list):
+            command_text = "\n".join(item['command'])
+        else:
+            command_text = item['command']
+            
+        preview_text.insert(tk.END, command_text)
+        preview_text.config(state=tk.DISABLED)
+        
+        # Add buttons
+        button_frame = ttk.Frame(confirm_dialog)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text="Configure Now",
+            command=lambda: self.execute_wizard_item(item, input_vars, index, configs, switch_num, confirm_dialog)
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Skip",
+            command=lambda: self.skip_wizard_item(index, configs, switch_num, confirm_dialog)
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel Wizard",
+            command=lambda: confirm_dialog.destroy()
+        ).pack(side=tk.RIGHT, padx=5)
+    
+    def execute_wizard_item(self, item, input_vars, index, configs, switch_num, dialog):
+        """Execute a configuration item from the wizard"""
+        # Close the dialog
+        dialog.destroy()
+        
+        # Process inputs
+        input_values = {name: var.get() for name, var in input_vars.items()}
+        
+        # Validate inputs
+        if item.get('inputs'):
+            for input_field in item.get('inputs', []):
+                name = input_field['name']
+                if name in input_values:
+                    value = input_values[name]
+                    if not value:
+                        messagebox.showerror("Input Error", f"Please enter a value for {input_field['description']}")
+                        # Restart this step
+                        self.run_wizard_step(index, configs, switch_num)
+                        return
+                    
+                    # Convert to int if needed
+                    if input_field['type'] == 'int':
+                        try:
+                            input_values[name] = int(value)
+                        except ValueError:
+                            messagebox.showerror("Input Error", 
+                                                f"Invalid value for {input_field['description']}. Must be a number.")
+                            # Restart this step
+                            self.run_wizard_step(index, configs, switch_num)
+                            return
+        
+        # Get commands
+        commands = item['command']
+        if not isinstance(commands, list):
+            commands = [commands]
+        
+        # Format commands with inputs
+        try:
+            formatted_commands = []
+            for cmd in commands:
+                formatted_cmd = cmd
+                if input_values:
+                    try:
+                        formatted_cmd = cmd.format(**input_values)
+                    except KeyError:
+                        pass  # Keep original if format fails
+                formatted_commands.append(formatted_cmd)
+        except Exception as e:
+            messagebox.showerror("Command Error", f"Error formatting command: {e}")
+            # Move to next step
+            self.run_wizard_step(index + 1, configs, switch_num)
+            return
+        
+        # Execute the commands
+        switch_data = self.switch_tabs[switch_num]
+        
+        for cmd in formatted_commands:
+            # Log the command
+            self.log_to_console_for_switch(switch_num, f"\n> {cmd}\n")
+            
+            # Send the command
+            try:
+                if switch_data['connection_type'].get() == "COM":
+                    switch_data['connection'].write((cmd + "\r\n").encode())
+                    switch_data['connection'].flush()
+                else:
+                    switch_data['ssh_shell'].send(cmd + "\n")
+                
+                # Delay between commands
+                time.sleep(1)
+            except Exception as e:
+                self.log_to_console_for_switch(switch_num, f"Error sending command: {e}\n")
+        
+        # Wait a bit longer after all commands
+        time.sleep(2)
+        
+        # Move to next step
+        self.run_wizard_step(index + 1, configs, switch_num)
+    
+    def skip_wizard_item(self, index, configs, switch_num, dialog):
+        """Skip a configuration item in the wizard"""
+        dialog.destroy()
+        self.run_wizard_step(index + 1, configs, switch_num)
+
 
 if __name__ == "__main__":
     root = tk.Tk()
